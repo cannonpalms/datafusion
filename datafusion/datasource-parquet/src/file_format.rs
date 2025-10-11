@@ -474,6 +474,11 @@ impl FileFormat for ParquetFormat {
             Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
+        // Add the condition cache if available
+        // Note: This is a workaround to access the cache from SessionState.
+        // Since SessionState implements Session trait, we can downcast to access the cache.
+        // However, this creates a circular dependency which we need to resolve differently.
+
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }

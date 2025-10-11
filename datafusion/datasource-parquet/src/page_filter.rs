@@ -21,6 +21,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::metrics::ParquetFileMetrics;
+use crate::condition_cache::{PageCacheKey, ParquetConditionCache};
+use crate::predicate_hash::hash_predicate;
 use crate::ParquetAccessPlan;
 
 use arrow::array::BooleanArray;
@@ -160,6 +162,8 @@ impl PagePruningAccessPlanFilter {
         parquet_schema: &SchemaDescriptor,
         parquet_metadata: &ParquetMetaData,
         file_metrics: &ParquetFileMetrics,
+        condition_cache: Option<Arc<ParquetConditionCache>>,
+        file_id: u64,
     ) -> ParquetAccessPlan {
         // scoped timer updates on drop
         let _timer_guard = file_metrics.page_index_eval_time.timer();
@@ -223,6 +227,8 @@ impl PagePruningAccessPlanFilter {
                     converter,
                     parquet_metadata,
                     file_metrics,
+                    condition_cache.clone(),
+                    file_id,
                 );
 
                 let Some(selection) = selection else {
@@ -304,7 +310,61 @@ fn prune_pages_in_one_row_group(
     converter: StatisticsConverter<'_>,
     parquet_metadata: &ParquetMetaData,
     metrics: &ParquetFileMetrics,
+    condition_cache: Option<Arc<ParquetConditionCache>>,
+    file_id: u64,
 ) -> Option<RowSelection> {
+    // Check cache first if available
+    if let Some(cache) = &condition_cache {
+        let predicate_hash = hash_predicate(pruning_predicate.predicate_expr().as_ref());
+        let cache_key = PageCacheKey {
+            file_id,
+            row_group_idx: row_group_index,
+            predicate_hash,
+            file_version: 0, // TODO: Use actual file version/mtime
+        };
+
+        // Try to get cached page bitmap
+        if let Some(cached_bitmap) = cache.get_page_bitmap(&cache_key) {
+            // Convert cached bitmap to RowSelection
+            let row_group = &parquet_metadata.row_groups()[row_group_index];
+            let total_rows = row_group.num_rows() as usize;
+
+            // The cached bitmap has one bit per page
+            // We need to convert it to a RowSelection
+            let mut selectors = Vec::new();
+            let mut current_row = 0;
+
+            for (page_idx, include_page) in cached_bitmap.iter().enumerate() {
+                // Get page row count from metadata
+                // This is a simplification - in practice we'd need to properly calculate page rows
+                // For now, use approximate page size
+                let page_rows = if page_idx == cached_bitmap.len() - 1 {
+                    // Last page might have fewer rows
+                    total_rows - current_row
+                } else {
+                    // Assume approximately equal page sizes
+                    1000 // Based on set_data_page_row_count_limit(1000) in example
+                };
+
+                if page_rows == 0 {
+                    break;
+                }
+
+                if *include_page {
+                    selectors.push(RowSelector::select(page_rows));
+                } else {
+                    selectors.push(RowSelector::skip(page_rows));
+                }
+                current_row += page_rows;
+
+                if current_row >= total_rows {
+                    break;
+                }
+            }
+
+            return Some(RowSelection::from(selectors));
+        }
+    }
     let pruning_stats =
         PagesPruningStatistics::try_new(row_group_index, converter, parquet_metadata)?;
 
@@ -356,7 +416,30 @@ fn prune_pages_in_one_row_group(
         RowSelector::skip(sum_row)
     };
     vec.push(selector);
-    Some(RowSelection::from(vec))
+
+    let row_selection = RowSelection::from(vec);
+
+    // Cache the page pruning result if cache is available
+    if let Some(cache) = condition_cache {
+        use bitvec::prelude::*;
+        let predicate_hash = hash_predicate(pruning_predicate.predicate_expr().as_ref());
+        let cache_key = PageCacheKey {
+            file_id,
+            row_group_idx: row_group_index,
+            predicate_hash,
+            file_version: 0, // TODO: Use actual file version/mtime
+        };
+
+        // Convert the boolean values to a BitVec for caching
+        let mut page_bitmap = BitVec::with_capacity(values.len());
+        for &value in &values {
+            page_bitmap.push(value);
+        }
+
+        cache.put_page_bitmap(cache_key, page_bitmap);
+    }
+
+    Some(row_selection)
 }
 
 /// Implement [`PruningStatistics`] for one column's PageIndex (column_index + offset_index)

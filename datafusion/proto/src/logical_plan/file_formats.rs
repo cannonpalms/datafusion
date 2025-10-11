@@ -520,6 +520,12 @@ mod parquet {
             max_predicate_cache_size: proto.max_predicate_cache_size_opt.as_ref().map(|opt| match opt {
                 parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size) => *size as usize,
             }),
+            // Condition cache options - use defaults for now since they're not in proto yet
+            enable_condition_cache: false,
+            condition_cache_size_mb: 100,
+            condition_cache_page_level: false,
+            condition_cache_ttl_seconds: 3600,
+            condition_cache_min_selectivity: 0.9,
         }
         }
     }

@@ -574,6 +574,33 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
+        // Query Condition Cache Options (inspired by ClickHouse)
+        // These options control the caching of predicate evaluation results at row group level
+
+        /// (reading) Enable the query condition cache. When enabled, DataFusion caches
+        /// the results of predicate evaluation at the row group level, storing a bitmap
+        /// (1 bit per row group) indicating whether each row group contains matching rows.
+        /// This can significantly speed up repeated queries with similar WHERE clauses.
+        pub enable_condition_cache: bool, default = false
+
+        /// (reading) Maximum size of the condition cache in MB. The cache uses BitVec
+        /// for extreme memory efficiency (can cache info for ~6.8 trillion rows in 100MB).
+        pub condition_cache_size_mb: usize, default = 100
+
+        /// (reading) Enable page-level caching in the condition cache. When enabled,
+        /// the cache stores more granular information at the page level within row groups,
+        /// which can provide better pruning but uses more memory.
+        pub condition_cache_page_level: bool, default = false
+
+        /// (reading) TTL for condition cache entries in seconds. Entries older than
+        /// this will be evicted on the next access attempt.
+        pub condition_cache_ttl_seconds: u64, default = 3600
+
+        /// (reading) Minimum selectivity threshold for caching predicates. Predicates that
+        /// match more than this percentage of rows won't be cached (e.g., 0.9 means
+        /// don't cache if >90% of rows match). Range: 0.0 to 1.0.
+        pub condition_cache_min_selectivity: f64, default = 0.9
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 

@@ -109,6 +109,8 @@ pub(super) struct ParquetOpener {
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
     pub max_predicate_cache_size: Option<usize>,
+    /// Optional condition cache for caching predicate evaluation results
+    pub(crate) condition_cache: Option<Arc<super::ParquetConditionCache>>,
 }
 
 impl FileOpener for ParquetOpener {
@@ -160,6 +162,7 @@ impl FileOpener for ParquetOpener {
         #[cfg(feature = "parquet_encryption")]
         let encryption_context = self.get_encryption_context();
         let max_predicate_cache_size = self.max_predicate_cache_size;
+        let condition_cache = self.condition_cache.clone();
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -360,7 +363,20 @@ impl FileOpener for ParquetOpener {
             // If there is a predicate that can be evaluated against the metadata
             if let Some(predicate) = predicate.as_ref() {
                 if enable_row_group_stats_pruning {
-                    row_groups.prune_by_statistics(
+                    // Generate a file ID from the file name/path for cache key
+                    let file_id = {
+                        use std::collections::hash_map::DefaultHasher;
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = DefaultHasher::new();
+                        file_name.hash(&mut hasher);
+                        hasher.finish()
+                    };
+
+                    // Use cache-aware pruning if cache is available
+                    row_groups.prune_by_statistics_with_cache(
+                        condition_cache.clone(),
+                        file_id,
+                        Some(file_metadata.file_metadata()),
                         &physical_file_schema,
                         builder.parquet_schema(),
                         rg_metadata,
@@ -388,12 +404,23 @@ impl FileOpener for ParquetOpener {
             // with that range can be skipped as well
             if enable_page_index && !access_plan.is_empty() {
                 if let Some(p) = page_pruning_predicate {
+                    // Recompute file ID for page cache (same as row group cache)
+                    let file_id = {
+                        use std::collections::hash_map::DefaultHasher;
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = DefaultHasher::new();
+                        file_name.hash(&mut hasher);
+                        hasher.finish()
+                    };
+
                     access_plan = p.prune_plan_with_page_index(
                         access_plan,
                         &physical_file_schema,
                         builder.parquet_schema(),
                         file_metadata.as_ref(),
                         &file_metrics,
+                        condition_cache.clone(),
+                        file_id,
                     );
                 }
             }
@@ -871,6 +898,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                condition_cache: None,
             }
         };
 
@@ -944,6 +972,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                condition_cache: None,
             }
         };
 
@@ -1033,6 +1062,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                condition_cache: None,
             }
         };
 
@@ -1125,6 +1155,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                condition_cache: None,
             }
         };
 
@@ -1217,6 +1248,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                condition_cache: None,
             }
         };
 
@@ -1367,6 +1399,7 @@ mod test {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             max_predicate_cache_size: None,
+            condition_cache: None,
         };
 
         let predicate = logical2physical(&col("a").eq(lit(1u64)), &table_schema);

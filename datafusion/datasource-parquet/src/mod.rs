@@ -20,11 +20,13 @@
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 
 pub mod access_plan;
+pub mod condition_cache;
 pub mod file_format;
 pub mod metadata;
 mod metrics;
 mod opener;
 mod page_filter;
+mod predicate_hash;
 mod reader;
 mod row_filter;
 mod row_group_filter;
@@ -32,6 +34,7 @@ pub mod source;
 mod writer;
 
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
+pub use condition_cache::{ConditionCacheConfig, ParquetConditionCache};
 pub use file_format::*;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;

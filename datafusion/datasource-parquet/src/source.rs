@@ -21,6 +21,7 @@ use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use crate::condition_cache::ParquetConditionCache;
 use crate::opener::build_pruning_predicates;
 use crate::opener::ParquetOpener;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
@@ -289,6 +290,8 @@ pub struct ParquetSource {
     pub(crate) projected_statistics: Option<Statistics>,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
+    /// Optional condition cache for storing predicate evaluation results
+    pub(crate) condition_cache: Option<Arc<ParquetConditionCache>>,
 }
 
 impl ParquetSource {
@@ -327,6 +330,15 @@ impl ParquetSource {
         encryption_factory: Arc<dyn EncryptionFactory>,
     ) -> Self {
         self.encryption_factory = Some(encryption_factory);
+        self
+    }
+
+    /// Set the condition cache for caching predicate evaluation results
+    pub fn with_condition_cache(
+        mut self,
+        condition_cache: Arc<ParquetConditionCache>,
+    ) -> Self {
+        self.condition_cache = Some(condition_cache);
         self
     }
 
@@ -584,6 +596,7 @@ impl FileSource for ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
+            condition_cache: self.condition_cache.clone(),
         })
     }
 

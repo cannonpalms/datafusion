@@ -19,8 +19,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::{ParquetAccessPlan, ParquetFileMetrics};
+use super::condition_cache::{ParquetConditionCache, RowGroupCacheKey};
+use super::predicate_hash::hash_predicate;
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::Schema;
+use bitvec::prelude::*;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
@@ -29,6 +32,7 @@ use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::data_type::Decimal;
+use parquet::file::metadata::FileMetaData;
 use parquet::schema::types::SchemaDescriptor;
 use parquet::{
     arrow::{async_reader::AsyncFileReader, ParquetRecordBatchStreamBuilder},
@@ -92,6 +96,115 @@ impl RowGroupAccessPlanFilter {
             }
         }
     }
+    /// Prune remaining row groups using cached results if available.
+    ///
+    /// This method first checks the condition cache for previously computed results.
+    /// If no cache entry exists, it falls back to computing the statistics.
+    ///
+    /// # Arguments
+    /// * `cache` - Optional condition cache. If None, behaves like `prune_by_statistics`
+    /// * `file_id` - Unique identifier for the file being processed
+    /// * `file_metadata` - Parquet file metadata for versioning
+    /// * `arrow_schema` - Arrow schema of the data
+    /// * `parquet_schema` - Parquet schema descriptor
+    /// * `groups` - Row group metadata
+    /// * `predicate` - The pruning predicate to evaluate
+    /// * `metrics` - Metrics to update
+    pub fn prune_by_statistics_with_cache(
+        &mut self,
+        cache: Option<Arc<ParquetConditionCache>>,
+        file_id: u64,
+        file_metadata: Option<&FileMetaData>,
+        arrow_schema: &Schema,
+        parquet_schema: &SchemaDescriptor,
+        groups: &[RowGroupMetaData],
+        predicate: &PruningPredicate,
+        metrics: &ParquetFileMetrics,
+    ) {
+        // If cache is provided and enabled, try to use it
+        if let Some(cache) = cache {
+            if let Some(file_meta) = file_metadata {
+                let predicate_hash = hash_predicate(predicate.orig_expr().as_ref());
+                let file_version = file_meta.created_by()
+                    .as_deref()
+                    .unwrap_or("")
+                    .bytes()
+                    .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+
+                let cache_key = RowGroupCacheKey {
+                    file_id,
+                    predicate_hash,
+                    file_version,
+                };
+
+                // Check if we have a cached result
+                if let Some(bitmap) = cache.get_row_group_bitmap(&cache_key) {
+                    // Apply cached results
+                    assert_eq!(bitmap.len(), groups.len());
+                    for (idx, can_contain_matches) in bitmap.iter().enumerate() {
+                        if !self.access_plan.should_scan(idx) {
+                            continue;
+                        }
+
+                        if !*can_contain_matches {
+                            self.access_plan.skip(idx);
+                            metrics.row_groups_pruned_statistics.add(1);
+                        } else {
+                            metrics.row_groups_matched_statistics.add(1);
+                        }
+                    }
+                    return;
+                }
+
+                // No cache hit - compute and cache the result
+                let mut bitmap = BitVec::new();
+                bitmap.resize(groups.len(), false);
+
+                // Compute statistics for all row groups
+                let row_group_indexes = self.access_plan.row_group_indexes();
+                let row_group_metadatas = row_group_indexes
+                    .iter()
+                    .map(|&i| &groups[i])
+                    .collect::<Vec<_>>();
+
+                let pruning_stats = RowGroupPruningStatistics {
+                    parquet_schema,
+                    row_group_metadatas,
+                    arrow_schema,
+                };
+
+                // Evaluate predicate
+                match predicate.prune(&pruning_stats) {
+                    Ok(values) => {
+                        // Update bitmap and access plan
+                        for (&idx, &value) in row_group_indexes.iter().zip(values.iter()) {
+                            bitmap.set(idx, value);
+                            if !value {
+                                self.access_plan.skip(idx);
+                                metrics.row_groups_pruned_statistics.add(1);
+                            } else {
+                                metrics.row_groups_matched_statistics.add(1);
+                            }
+                        }
+
+                        // Store in cache
+                        cache.put_row_group_bitmap(cache_key, bitmap);
+                    }
+                    Err(e) => {
+                        log::debug!("Error evaluating row group predicate values {e}");
+                        metrics.predicate_evaluation_errors.add(1);
+                    }
+                }
+            } else {
+                // No file metadata available, fall back to regular pruning
+                self.prune_by_statistics(arrow_schema, parquet_schema, groups, predicate, metrics);
+            }
+        } else {
+            // No cache provided, use regular pruning
+            self.prune_by_statistics(arrow_schema, parquet_schema, groups, predicate, metrics);
+        }
+    }
+
     /// Prune remaining row groups using min/max/null_count statistics and
     /// the [`PruningPredicate`] to determine if the predicate can not be true.
     ///

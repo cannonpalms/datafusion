@@ -2093,8 +2093,10 @@ version = "50.1.0"
 dependencies = [
  "arrow",
  "async-trait",
+ "bitvec",
  "bytes",
  "chrono",
+ "dashmap",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
@@ -2113,6 +2115,7 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
+ "rustc-hash",
  "tokio",
 ]
 

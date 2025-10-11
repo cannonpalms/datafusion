@@ -33,7 +33,9 @@ all-features = true
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
+bitvec = "1.0"
 bytes = { workspace = true }
+dashmap = "6.0"
 datafusion-common = { workspace = true, features = ["object_store", "parquet"] }
 datafusion-common-runtime = { workspace = true }
 datafusion-datasource = { workspace = true }
@@ -52,6 +54,7 @@ log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true }
+rustc-hash = "2.0"
 tokio = { workspace = true }
 
 [dev-dependencies]

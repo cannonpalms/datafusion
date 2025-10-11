@@ -209,6 +209,12 @@ impl ParquetOptions {
             coerce_int96: _,     // not used for writer props
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
+            // Condition cache options (not used for writer props)
+            enable_condition_cache: _,
+            condition_cache_size_mb: _,
+            condition_cache_page_level: _,
+            condition_cache_ttl_seconds: _,
+            condition_cache_min_selectivity: _,
         } = self;
 
         let mut builder = WriterProperties::builder()

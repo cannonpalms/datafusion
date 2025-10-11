@@ -48,6 +48,8 @@ use datafusion_common::{
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
+use datafusion_datasource_parquet::condition_cache::{ConditionCacheConfig, ParquetConditionCache};
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
@@ -187,6 +189,8 @@ pub struct SessionState {
     /// Cache logical plans of prepared statements for later execution.
     /// Key is the prepared statement name.
     prepared_plans: HashMap<String, Arc<PreparedPlan>>,
+    /// Parquet query condition cache for storing predicate evaluation results
+    parquet_condition_cache: Option<Arc<ParquetConditionCache>>,
 }
 
 impl Debug for SessionState {
@@ -729,6 +733,11 @@ impl SessionState {
     /// Return the [`SessionConfig`]
     pub fn config(&self) -> &SessionConfig {
         &self.config
+    }
+
+    /// Return the Parquet condition cache if enabled
+    pub fn parquet_condition_cache(&self) -> Option<Arc<ParquetConditionCache>> {
+        self.parquet_condition_cache.clone()
     }
 
     /// Return the mutable [`SessionConfig`].
@@ -1379,6 +1388,22 @@ impl SessionStateBuilder {
         let config = config.unwrap_or_default();
         let runtime_env = runtime_env.unwrap_or_else(|| Arc::new(RuntimeEnv::default()));
 
+        // Create Parquet condition cache if enabled
+        let parquet_condition_cache = if config.options().execution.parquet.enable_condition_cache {
+            let cache_config = ConditionCacheConfig {
+                enable: true,
+                max_size_mb: config.options().execution.parquet.condition_cache_size_mb,
+                enable_page_cache: config.options().execution.parquet.condition_cache_page_level,
+                ttl_seconds: config.options().execution.parquet.condition_cache_ttl_seconds,
+                min_selectivity_to_cache: config.options().execution.parquet.condition_cache_min_selectivity,
+            };
+            // Create a metrics set for the cache
+            let metrics = ExecutionPlanMetricsSet::new();
+            Some(Arc::new(ParquetConditionCache::new(cache_config, &metrics)))
+        } else {
+            None
+        };
+
         let mut state = SessionState {
             session_id: session_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
             analyzer: analyzer.unwrap_or_default(),
@@ -1408,6 +1433,7 @@ impl SessionStateBuilder {
             runtime_env,
             function_factory,
             prepared_plans: HashMap::new(),
+            parquet_condition_cache,
         };
 
         if let Some(file_formats) = file_formats {
