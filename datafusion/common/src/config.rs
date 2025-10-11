@@ -581,7 +581,7 @@ config_namespace! {
         /// the results of predicate evaluation at the row group level, storing a bitmap
         /// (1 bit per row group) indicating whether each row group contains matching rows.
         /// This can significantly speed up repeated queries with similar WHERE clauses.
-        pub enable_condition_cache: bool, default = false
+        pub enable_condition_cache: bool, default = true
 
         /// (reading) Maximum size of the condition cache in MB. The cache uses BitVec
         /// for extreme memory efficiency (can cache info for ~6.8 trillion rows in 100MB).
@@ -590,7 +590,7 @@ config_namespace! {
         /// (reading) Enable page-level caching in the condition cache. When enabled,
         /// the cache stores more granular information at the page level within row groups,
         /// which can provide better pruning but uses more memory.
-        pub condition_cache_page_level: bool, default = false
+        pub condition_cache_page_level: bool, default = true
 
         /// (reading) TTL for condition cache entries in seconds. Entries older than
         /// this will be evicted on the next access attempt.
