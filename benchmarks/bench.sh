@@ -43,6 +43,7 @@ DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
 VIRTUAL_ENV=${VIRTUAL_ENV:-$SCRIPT_DIR/venv}
+ITERATIONS=${ITERATIONS:-5}
 
 usage() {
     echo "
@@ -603,7 +604,7 @@ run_tpch() {
     echo "Running tpch benchmark..."
 
     FORMAT=$2
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations ${ITERATIONS} --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the tpch in memory
@@ -619,7 +620,7 @@ run_tpch_mem() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
     # -m means in memory
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations ${ITERATIONS} --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the compile profile benchmark helper
@@ -641,7 +642,7 @@ run_cancellation() {
     RESULTS_FILE="${RESULTS_DIR}/cancellation.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running cancellation benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}"
+    debug_run $CARGO_COMMAND --bin dfbench -- cancellation --iterations ${ITERATIONS} --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}"
 }
 
 
@@ -695,7 +696,7 @@ run_clickbench_1() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations ${ITERATIONS} --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
  # Runs the clickbench benchmark with the partitioned parquet dataset (100 files)
@@ -703,7 +704,7 @@ run_clickbench_partitioned() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations ${ITERATIONS} --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 
@@ -712,7 +713,7 @@ run_clickbench_pushdown() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_pushdown.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark with pushdown_filters=true, reorder_filters=true..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench --pushdown --iterations ${ITERATIONS} --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 
@@ -721,7 +722,7 @@ run_clickbench_extended() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_extended.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) extended benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations ${ITERATIONS} --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)
@@ -836,7 +837,7 @@ run_imdb() {
     RESULTS_FILE="${RESULTS_DIR}/imdb.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running imdb benchmark..."
-    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations ${ITERATIONS} --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 data_h2o() {
@@ -1110,7 +1111,7 @@ run_external_aggr() {
     # number-of-partitions), and by default `--partitions` is set to number of
     # CPU cores, we set a constant number of partitions to prevent this
     # benchmark to fail on some machines.
-    debug_run $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations ${ITERATIONS} --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the sort integration benchmark
@@ -1125,7 +1126,7 @@ run_sort_tpch() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sort tpch benchmark..."
 
-    debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations ${ITERATIONS} --path "${TPCH_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the sort tpch integration benchmark with limit 100 (topk)
@@ -1135,7 +1136,7 @@ run_topk_tpch() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running topk tpch benchmark..."
 
-    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100 ${QUERY_ARG}
+    $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations ${ITERATIONS} --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --limit 100 ${QUERY_ARG}
 }
 
 # Runs the nlj benchmark
@@ -1143,7 +1144,7 @@ run_nlj() {
     RESULTS_FILE="${RESULTS_DIR}/nlj.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running nlj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- nlj --iterations ${ITERATIONS} -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the hj benchmark
@@ -1151,7 +1152,7 @@ run_hj() {
     RESULTS_FILE="${RESULTS_DIR}/hj.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running hj benchmark..."
-    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations ${ITERATIONS} -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 
