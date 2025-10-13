@@ -127,7 +127,6 @@ impl RowGroupAccessPlanFilter {
                 let predicate_hash = hash_predicate(predicate.orig_expr().as_ref());
                 let file_version = file_meta
                     .created_by()
-                    .as_deref()
                     .unwrap_or("")
                     .bytes()
                     .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));

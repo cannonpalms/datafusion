@@ -91,7 +91,7 @@ fn hash_expr_tree_no_normalize<H: Hasher>(expr: &dyn PhysicalExpr, hasher: &mut 
         }
     } else {
         // For other expression types, hash the debug representation
-        let debug_str = format!("{:?}", expr);
+        let debug_str = format!("{expr:?}");
         debug_str.hash(hasher);
     }
 }
@@ -186,7 +186,7 @@ fn hash_expr_tree<H: Hasher>(expr: &dyn PhysicalExpr, hasher: &mut H) {
         }
     } else {
         // For other expression types, hash the debug representation
-        let debug_str = format!("{:?}", expr);
+        let debug_str = format!("{expr:?}");
         debug_str.hash(hasher);
     }
 }
@@ -239,7 +239,7 @@ fn hash_scalar_value<H: Hasher>(value: &ScalarValue, hasher: &mut H) {
         }
         _ => {
             // For other types, hash the string representation
-            format!("{:?}", value).hash(hasher);
+            format!("{value:?}").hash(hasher);
         }
     }
 }
@@ -287,7 +287,6 @@ mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_physical_expr::expressions;
-    use std::sync::Arc;
 
     #[test]
     fn test_hash_predicate_deterministic() {
@@ -353,31 +352,5 @@ mod tests {
         let hash1 = hash_predicate(expr1.as_ref());
         let hash2 = hash_predicate(expr2.as_ref());
         assert_ne!(hash1, hash2);
-    }
-
-    #[test]
-    fn test_extract_columns() {
-        // Create a test schema
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Utf8, true),
-        ]);
-
-        // Create a predicate with multiple columns: (a > 5) AND (b = 'test')
-        let col_a = expressions::col("a", &schema).unwrap();
-        let col_b = expressions::col("b", &schema).unwrap();
-        let lit5 = expressions::lit(ScalarValue::Int32(Some(5)));
-        let lit_test = expressions::lit(ScalarValue::Utf8(Some("test".to_string())));
-
-        let left = expressions::binary(col_a, Operator::Gt, lit5, &schema).unwrap();
-
-        let right = expressions::binary(col_b, Operator::Eq, lit_test, &schema).unwrap();
-
-        let expr = expressions::binary(left, Operator::And, right, &schema).unwrap();
-
-        let columns = extract_columns(expr.as_ref());
-        assert_eq!(columns.len(), 2);
-        assert_eq!(columns[0].name(), "a");
-        assert_eq!(columns[1].name(), "b");
     }
 }

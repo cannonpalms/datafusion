@@ -214,10 +214,8 @@ impl ParquetConditionCache {
             if let Ok(elapsed) = entry.created_at.elapsed() {
                 if elapsed < Duration::from_secs(self.config.ttl_seconds) {
                     self.metrics.row_group_cache_hits.add(1);
-                    return Some(entry.data.clone());
+                    return Some(Arc::clone(&entry.data));
                 } else {
-                    // Entry expired, remove it
-                    drop(entry);
                     self.row_group_cache.remove(key);
                 }
             }
@@ -278,10 +276,8 @@ impl ParquetConditionCache {
             if let Ok(elapsed) = entry.created_at.elapsed() {
                 if elapsed < Duration::from_secs(self.config.ttl_seconds) {
                     self.metrics.page_cache_hits.add(1);
-                    return Some(entry.data.clone());
+                    return Some(Arc::clone(&entry.data));
                 } else {
-                    // Entry expired, remove it
-                    drop(entry);
                     self.page_cache.remove(key);
                 }
             }
@@ -385,7 +381,7 @@ impl ParquetConditionCache {
     fn estimate_bitmap_memory(bitmap: &BitVec) -> usize {
         use std::mem::size_of;
         // BitVec size + overhead for Arc and HashMap entry
-        (bitmap.len() + 7) / 8 + size_of::<CacheEntry<BitVec>>() + 64
+        bitmap.len().div_ceil(8) + size_of::<CacheEntry<BitVec>>() + 64
     }
 
     /// Evict entries if needed to stay within memory limit
