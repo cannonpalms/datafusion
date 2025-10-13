@@ -45,27 +45,98 @@ async fn main() -> Result<()> {
         .with_parquet_condition_cache_min_selectivity(0.9);
 
     println!("Method 1 - Using builder methods:");
-    println!("  Cache enabled: {}", config_builder.parquet_condition_cache_enabled());
-    println!("  Cache size: {} MB", config_builder.options().execution.parquet.condition_cache_size_mb);
-    println!("  TTL: {} seconds", config_builder.options().execution.parquet.condition_cache_ttl_seconds);
-    println!("  Page-level: {}", config_builder.options().execution.parquet.condition_cache_page_level);
-    println!("  Min selectivity: {}", config_builder.options().execution.parquet.condition_cache_min_selectivity);
+    println!(
+        "  Cache enabled: {}",
+        config_builder.parquet_condition_cache_enabled()
+    );
+    println!(
+        "  Cache size: {} MB",
+        config_builder
+            .options()
+            .execution
+            .parquet
+            .condition_cache_size_mb
+    );
+    println!(
+        "  TTL: {} seconds",
+        config_builder
+            .options()
+            .execution
+            .parquet
+            .condition_cache_ttl_seconds
+    );
+    println!(
+        "  Page-level: {}",
+        config_builder
+            .options()
+            .execution
+            .parquet
+            .condition_cache_page_level
+    );
+    println!(
+        "  Min selectivity: {}",
+        config_builder
+            .options()
+            .execution
+            .parquet
+            .condition_cache_min_selectivity
+    );
     println!();
 
     // Method 2: Using string-based configuration
     let config_strings = SessionConfig::new()
         .set_bool("datafusion.execution.parquet.enable_condition_cache", true)
         .set_usize("datafusion.execution.parquet.condition_cache_size_mb", 50)
-        .set_u64("datafusion.execution.parquet.condition_cache_ttl_seconds", 1800)
-        .set_bool("datafusion.execution.parquet.condition_cache_page_level", true)
-        .set_str("datafusion.execution.parquet.condition_cache_min_selectivity", "0.8");
+        .set_u64(
+            "datafusion.execution.parquet.condition_cache_ttl_seconds",
+            1800,
+        )
+        .set_bool(
+            "datafusion.execution.parquet.condition_cache_page_level",
+            true,
+        )
+        .set_str(
+            "datafusion.execution.parquet.condition_cache_min_selectivity",
+            "0.8",
+        );
 
     println!("Method 2 - Using string-based configuration:");
-    println!("  Cache enabled: {}", config_strings.parquet_condition_cache_enabled());
-    println!("  Cache size: {} MB", config_strings.options().execution.parquet.condition_cache_size_mb);
-    println!("  TTL: {} seconds", config_strings.options().execution.parquet.condition_cache_ttl_seconds);
-    println!("  Page-level: {}", config_strings.options().execution.parquet.condition_cache_page_level);
-    println!("  Min selectivity: {}", config_strings.options().execution.parquet.condition_cache_min_selectivity);
+    println!(
+        "  Cache enabled: {}",
+        config_strings.parquet_condition_cache_enabled()
+    );
+    println!(
+        "  Cache size: {} MB",
+        config_strings
+            .options()
+            .execution
+            .parquet
+            .condition_cache_size_mb
+    );
+    println!(
+        "  TTL: {} seconds",
+        config_strings
+            .options()
+            .execution
+            .parquet
+            .condition_cache_ttl_seconds
+    );
+    println!(
+        "  Page-level: {}",
+        config_strings
+            .options()
+            .execution
+            .parquet
+            .condition_cache_page_level
+    );
+    println!(
+        "  Min selectivity: {}",
+        config_strings
+            .options()
+            .execution
+            .parquet
+            .condition_cache_min_selectivity
+    );
     println!();
 
     // Create a sample Parquet file and demonstrate usage
@@ -80,7 +151,12 @@ async fn main() -> Result<()> {
     println!();
 
     // Register and query the table
-    ctx.register_parquet("demo", file_path.to_str().unwrap(), ParquetReadOptions::default()).await?;
+    ctx.register_parquet(
+        "demo",
+        file_path.to_str().unwrap(),
+        ParquetReadOptions::default(),
+    )
+    .await?;
 
     println!("Running sample queries with cache configuration enabled:");
     println!("{}", "-".repeat(60));
@@ -128,7 +204,10 @@ async fn main() -> Result<()> {
 }
 
 /// Create a small sample Parquet file
-async fn create_sample_parquet_file(ctx: &SessionContext, path: &std::path::Path) -> Result<()> {
+async fn create_sample_parquet_file(
+    ctx: &SessionContext,
+    path: &std::path::Path,
+) -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
         Field::new("category", DataType::Utf8, false),
@@ -139,11 +218,14 @@ async fn create_sample_parquet_file(ctx: &SessionContext, path: &std::path::Path
     for batch_idx in 0..5 {
         let base = batch_idx * 100;
         let ids: Vec<i32> = (base..base + 100).collect();
-        let categories: Vec<&str> = ids.iter().map(|i| match i % 3 {
-            0 => "A",
-            1 => "B",
-            _ => "C",
-        }).collect();
+        let categories: Vec<&str> = ids
+            .iter()
+            .map(|i| match i % 3 {
+                0 => "A",
+                1 => "B",
+                _ => "C",
+            })
+            .collect();
         let values: Vec<i32> = ids.iter().map(|i| (i * 17) % 1000).collect();
 
         batches.push(RecordBatch::try_new(
@@ -161,7 +243,8 @@ async fn create_sample_parquet_file(ctx: &SessionContext, path: &std::path::Path
         path.to_str().unwrap(),
         DataFrameWriteOptions::new().with_single_file_output(true),
         None,
-    ).await?;
+    )
+    .await?;
 
     Ok(())
 }

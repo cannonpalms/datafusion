@@ -45,11 +45,12 @@ use datafusion_common::{
     config_err, exec_err, plan_datafusion_err, DFSchema, DataFusionError,
     ResolvedTableReference, TableReference,
 };
+use datafusion_datasource_parquet::condition_cache::{
+    ConditionCacheConfig, ParquetConditionCache,
+};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
-use datafusion_datasource_parquet::condition_cache::{ConditionCacheConfig, ParquetConditionCache};
-use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
@@ -70,6 +71,7 @@ use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 #[cfg(feature = "sql")]
@@ -289,7 +291,9 @@ impl Session for SessionState {
     }
 
     fn parquet_condition_cache(&self) -> Option<Arc<dyn Any + Send + Sync>> {
-        self.parquet_condition_cache.clone().map(|cache| cache as Arc<dyn Any + Send + Sync>)
+        self.parquet_condition_cache
+            .clone()
+            .map(|cache| cache as Arc<dyn Any + Send + Sync>)
     }
 }
 
@@ -745,13 +749,21 @@ impl SessionState {
     }
 
     /// Get cache statistics if cache is enabled
-    pub fn parquet_cache_stats(&self) -> Option<datafusion_datasource_parquet::condition_cache::CacheStatistics> {
-        self.parquet_condition_cache.as_ref().map(|cache| cache.get_stats())
+    pub fn parquet_cache_stats(
+        &self,
+    ) -> Option<datafusion_datasource_parquet::condition_cache::CacheStatistics> {
+        self.parquet_condition_cache
+            .as_ref()
+            .map(|cache| cache.get_stats())
     }
 
     /// Get cache hit rate if cache is enabled
-    pub fn parquet_cache_hit_rate(&self) -> Option<datafusion_datasource_parquet::condition_cache::CacheHitRate> {
-        self.parquet_condition_cache.as_ref().map(|cache| cache.hit_rate())
+    pub fn parquet_cache_hit_rate(
+        &self,
+    ) -> Option<datafusion_datasource_parquet::condition_cache::CacheHitRate> {
+        self.parquet_condition_cache
+            .as_ref()
+            .map(|cache| cache.hit_rate())
     }
 
     /// Return the mutable [`SessionConfig`].
@@ -1403,13 +1415,30 @@ impl SessionStateBuilder {
         let runtime_env = runtime_env.unwrap_or_else(|| Arc::new(RuntimeEnv::default()));
 
         // Create Parquet condition cache if enabled
-        let parquet_condition_cache = if config.options().execution.parquet.enable_condition_cache {
+        let parquet_condition_cache = if config
+            .options()
+            .execution
+            .parquet
+            .enable_condition_cache
+        {
             let cache_config = ConditionCacheConfig {
                 enable: true,
                 max_size_mb: config.options().execution.parquet.condition_cache_size_mb,
-                enable_page_cache: config.options().execution.parquet.condition_cache_page_level,
-                ttl_seconds: config.options().execution.parquet.condition_cache_ttl_seconds,
-                min_selectivity_to_cache: config.options().execution.parquet.condition_cache_min_selectivity,
+                enable_page_cache: config
+                    .options()
+                    .execution
+                    .parquet
+                    .condition_cache_page_level,
+                ttl_seconds: config
+                    .options()
+                    .execution
+                    .parquet
+                    .condition_cache_ttl_seconds,
+                min_selectivity_to_cache: config
+                    .options()
+                    .execution
+                    .parquet
+                    .condition_cache_min_selectivity,
             };
             // Create a metrics set for the cache
             let metrics = ExecutionPlanMetricsSet::new();

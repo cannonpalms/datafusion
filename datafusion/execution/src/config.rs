@@ -405,19 +405,31 @@ impl SessionConfig {
 
     /// Sets the TTL for condition cache entries in seconds
     pub fn with_parquet_condition_cache_ttl(mut self, ttl_seconds: u64) -> Self {
-        self.options_mut().execution.parquet.condition_cache_ttl_seconds = ttl_seconds;
+        self.options_mut()
+            .execution
+            .parquet
+            .condition_cache_ttl_seconds = ttl_seconds;
         self
     }
 
     /// Enables or disables page-level caching in the condition cache
     pub fn with_parquet_condition_cache_page_level(mut self, enabled: bool) -> Self {
-        self.options_mut().execution.parquet.condition_cache_page_level = enabled;
+        self.options_mut()
+            .execution
+            .parquet
+            .condition_cache_page_level = enabled;
         self
     }
 
     /// Sets the minimum selectivity threshold for caching predicates
-    pub fn with_parquet_condition_cache_min_selectivity(mut self, selectivity: f64) -> Self {
-        self.options_mut().execution.parquet.condition_cache_min_selectivity = selectivity;
+    pub fn with_parquet_condition_cache_min_selectivity(
+        mut self,
+        selectivity: f64,
+    ) -> Self {
+        self.options_mut()
+            .execution
+            .parquet
+            .condition_cache_min_selectivity = selectivity;
         self
     }
 
@@ -630,7 +642,6 @@ impl SessionConfig {
             .cloned()
             .map(|ext| Arc::downcast(ext).expect("TypeId unique"))
     }
-
 }
 
 impl From<ConfigOptions> for SessionConfig {

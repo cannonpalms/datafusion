@@ -63,18 +63,19 @@ async fn main() -> Result<()> {
     println!("{}", "=".repeat(60));
 
     let config_no_cache = SessionConfig::new()
-        .with_parquet_condition_cache(false)  // Cache disabled
+        .with_parquet_condition_cache(false) // Cache disabled
         .with_parquet_pruning(true)
         .with_parquet_bloom_filter_pruning(true)
-        .with_target_partitions(1);  // Single partition for consistent results
+        .with_target_partitions(1); // Single partition for consistent results
 
     let ctx_no_cache = SessionContext::new_with_config(config_no_cache);
-    ctx_no_cache.register_parquet(
-        "test_table",
-        file_path.to_str().unwrap(),
-        ParquetReadOptions::default(),
-    )
-    .await?;
+    ctx_no_cache
+        .register_parquet(
+            "test_table",
+            file_path.to_str().unwrap(),
+            ParquetReadOptions::default(),
+        )
+        .await?;
 
     let mut times_no_cache = Vec::new();
     for (name, query) in &queries {
@@ -101,30 +102,62 @@ async fn main() -> Result<()> {
     println!("{}", "=".repeat(60));
 
     let config_with_cache = SessionConfig::new()
-        .with_parquet_condition_cache(true)  // Cache enabled
-        .with_parquet_condition_cache_size_mb(100)  // Larger cache for 1M rows
+        .with_parquet_condition_cache(true) // Cache enabled
+        .with_parquet_condition_cache_size_mb(100) // Larger cache for 1M rows
         .with_parquet_condition_cache_ttl(3600)
-        .with_parquet_condition_cache_page_level(true)  // Enable page-level caching!
-        .with_parquet_condition_cache_min_selectivity(0.95)  // Cache even with 95% selectivity
+        .with_parquet_condition_cache_page_level(true) // Enable page-level caching!
+        .with_parquet_condition_cache_min_selectivity(0.95) // Cache even with 95% selectivity
         .with_parquet_pruning(true)
         .with_parquet_bloom_filter_pruning(true)
-        .with_target_partitions(1);  // Single partition for consistent results
+        .with_target_partitions(1); // Single partition for consistent results
 
     println!("Cache configuration:");
-    println!("  Enabled: {}", config_with_cache.parquet_condition_cache_enabled());
-    println!("  Size: {} MB", config_with_cache.options().execution.parquet.condition_cache_size_mb);
-    println!("  Page-level caching: {}", config_with_cache.options().execution.parquet.condition_cache_page_level);
-    println!("  TTL: {} seconds", config_with_cache.options().execution.parquet.condition_cache_ttl_seconds);
-    println!("  Min selectivity: {}", config_with_cache.options().execution.parquet.condition_cache_min_selectivity);
+    println!(
+        "  Enabled: {}",
+        config_with_cache.parquet_condition_cache_enabled()
+    );
+    println!(
+        "  Size: {} MB",
+        config_with_cache
+            .options()
+            .execution
+            .parquet
+            .condition_cache_size_mb
+    );
+    println!(
+        "  Page-level caching: {}",
+        config_with_cache
+            .options()
+            .execution
+            .parquet
+            .condition_cache_page_level
+    );
+    println!(
+        "  TTL: {} seconds",
+        config_with_cache
+            .options()
+            .execution
+            .parquet
+            .condition_cache_ttl_seconds
+    );
+    println!(
+        "  Min selectivity: {}",
+        config_with_cache
+            .options()
+            .execution
+            .parquet
+            .condition_cache_min_selectivity
+    );
     println!();
 
     let ctx_with_cache = SessionContext::new_with_config(config_with_cache);
-    ctx_with_cache.register_parquet(
-        "test_table",
-        file_path.to_str().unwrap(),
-        ParquetReadOptions::default(),
-    )
-    .await?;
+    ctx_with_cache
+        .register_parquet(
+            "test_table",
+            file_path.to_str().unwrap(),
+            ParquetReadOptions::default(),
+        )
+        .await?;
 
     let mut times_with_cache = Vec::new();
     let mut first_run_times = Vec::new();
@@ -156,7 +189,10 @@ async fn main() -> Result<()> {
     println!();
     println!("Performance Comparison:");
     println!("{}", "=".repeat(80));
-    println!("{:<35} {:>12} {:>12} {:>12} {:>10}", "Query", "No Cache", "First Run", "Cached", "Speedup");
+    println!(
+        "{:<35} {:>12} {:>12} {:>12} {:>10}",
+        "Query", "No Cache", "First Run", "Cached", "Speedup"
+    );
     println!("{}", "-".repeat(80));
 
     for (i, (name, _)) in queries.iter().enumerate() {
@@ -169,15 +205,13 @@ async fn main() -> Result<()> {
             0.0
         };
 
-        println!("{:<35} {:>12.3?} {:>12.3?} {:>12.3?} {:>9.2}x",
-            name,
-            time_no_cache,
-            time_first_run,
-            time_with_cache,
-            speedup);
+        println!(
+            "{:<35} {:>12.3?} {:>12.3?} {:>12.3?} {:>9.2}x",
+            name, time_no_cache, time_first_run, time_with_cache, speedup
+        );
     }
 
-    let num_row_groups = 100;  // Number of row groups in the dataset
+    let num_row_groups = 100; // Number of row groups in the dataset
 
     // Get actual cache metrics from the SessionState
     println!();
@@ -200,10 +234,15 @@ async fn main() -> Result<()> {
 
         println!();
         println!("Memory Usage:");
-        println!("  Total memory used: {} bytes", cache_stats.memory_usage_bytes);
+        println!(
+            "  Total memory used: {} bytes",
+            cache_stats.memory_usage_bytes
+        );
         println!("  Cache capacity: {} MB", cache_stats.config.max_size_mb);
         if cache_stats.config.max_size_mb > 0 {
-            let utilization = (cache_stats.memory_usage_bytes as f64 / (cache_stats.config.max_size_mb * 1024 * 1024) as f64) * 100.0;
+            let utilization = (cache_stats.memory_usage_bytes as f64
+                / (cache_stats.config.max_size_mb * 1024 * 1024) as f64)
+                * 100.0;
             println!("  Utilization: {:.4}%", utilization);
         }
         println!("  Evictions: {}", cache_stats.evictions);
@@ -221,7 +260,11 @@ async fn main() -> Result<()> {
     println!();
     println!("Cache Effectiveness Analysis:");
     println!("{}", "=".repeat(60));
-    println!("Working with {} row groups and ~{} pages total:", num_row_groups, num_row_groups * 10);
+    println!(
+        "Working with {} row groups and ~{} pages total:",
+        num_row_groups,
+        num_row_groups * 10
+    );
     println!();
 
     println!("Row Group Level Caching:");
@@ -232,16 +275,30 @@ async fn main() -> Result<()> {
 
     println!("Page Level Caching (ENABLED):");
     println!("  - Each row group has ~10 pages (1000 rows per page)");
-    println!("  - Page-level cache stores 1 bit per page (10x more granular than row groups)");
+    println!(
+        "  - Page-level cache stores 1 bit per page (10x more granular than row groups)"
+    );
     println!("  - Allows skipping individual pages within row groups");
     println!("  - Dramatically improves performance for selective queries");
     println!();
 
     println!("Cache Memory Efficiency:");
-    println!("  - Row group cache: 1 bit per row group = {} bits total", num_row_groups);
-    println!("  - Page cache: 1 bit per page = {} bits total", num_row_groups * 10);
-    println!("  - Total per predicate: ~{} bytes", (num_row_groups + num_row_groups * 10) / 8);
-    println!("  - With 100 MB cache, can store ~{} unique predicates", 100 * 1024 * 1024 * 8 / (num_row_groups + num_row_groups * 10));
+    println!(
+        "  - Row group cache: 1 bit per row group = {} bits total",
+        num_row_groups
+    );
+    println!(
+        "  - Page cache: 1 bit per page = {} bits total",
+        num_row_groups * 10
+    );
+    println!(
+        "  - Total per predicate: ~{} bytes",
+        (num_row_groups + num_row_groups * 10) / 8
+    );
+    println!(
+        "  - With 100 MB cache, can store ~{} unique predicates",
+        100 * 1024 * 1024 * 8 / (num_row_groups + num_row_groups * 10)
+    );
     println!();
 
     println!("Performance Impact:");
@@ -254,7 +311,10 @@ async fn main() -> Result<()> {
 }
 
 /// Create a large sample Parquet file with many row groups using DataFusion
-async fn create_sample_parquet_file(ctx: &SessionContext, path: &std::path::Path) -> Result<()> {
+async fn create_sample_parquet_file(
+    ctx: &SessionContext,
+    path: &std::path::Path,
+) -> Result<()> {
     // Define schema with more columns for realistic workload
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -279,8 +339,12 @@ async fn create_sample_parquet_file(ctx: &SessionContext, path: &std::path::Path
     let num_row_groups = 100;
     let rows_per_group = 10_000;
 
-    println!("Creating large Parquet file with {} row groups, {} rows each ({} total rows)",
-        num_row_groups, rows_per_group, num_row_groups * rows_per_group);
+    println!(
+        "Creating large Parquet file with {} row groups, {} rows each ({} total rows)",
+        num_row_groups,
+        rows_per_group,
+        num_row_groups * rows_per_group
+    );
 
     let mut all_batches = vec![];
 
@@ -372,8 +436,8 @@ async fn create_sample_parquet_file(ctx: &SessionContext, path: &std::path::Path
 
     // Configure writer properties to create multiple row groups
     let props = WriterProperties::builder()
-        .set_max_row_group_size(rows_per_group)  // 10,000 rows per group
-        .set_data_page_row_count_limit(1000)     // 1,000 rows per page
+        .set_max_row_group_size(rows_per_group) // 10,000 rows per group
+        .set_data_page_row_count_limit(1000) // 1,000 rows per page
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .build();
 
@@ -389,7 +453,10 @@ async fn create_sample_parquet_file(ctx: &SessionContext, path: &std::path::Path
     // Get file size
     let metadata = std::fs::metadata(path)?;
     let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
-    println!("Created Parquet file: {:.1} MB with ~1000 pages total", size_mb);
+    println!(
+        "Created Parquet file: {:.1} MB with ~1000 pages total",
+        size_mb
+    );
 
     Ok(())
 }

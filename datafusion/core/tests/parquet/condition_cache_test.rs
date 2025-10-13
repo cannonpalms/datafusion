@@ -23,7 +23,9 @@ use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl};
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
@@ -31,7 +33,8 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion_common::FileType;
 use datafusion_datasource_parquet::{
-    ConditionCacheConfig, ParquetAccessPlan, ParquetConditionCache, RowGroupAccessPlanFilter,
+    ConditionCacheConfig, ParquetAccessPlan, ParquetConditionCache,
+    RowGroupAccessPlanFilter,
 };
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::expressions as phys_expr;
@@ -75,7 +78,8 @@ async fn test_condition_cache_basic() -> Result<()> {
 
     // Create access plan
     let num_row_groups = metadata.num_row_groups();
-    let mut access_plan = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(num_row_groups));
+    let mut access_plan =
+        RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(num_row_groups));
 
     // First call - should miss cache and compute
     access_plan.prune_by_statistics_with_cache(
@@ -96,7 +100,8 @@ async fn test_condition_cache_basic() -> Result<()> {
     let first_result = access_plan.build();
 
     // Second call with same predicate - should hit cache
-    let mut access_plan2 = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(num_row_groups));
+    let mut access_plan2 =
+        RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(num_row_groups));
 
     access_plan2.prune_by_statistics_with_cache(
         Some(cache.clone()),
@@ -152,9 +157,9 @@ async fn test_condition_cache_selectivity() -> Result<()> {
     let reader = parquet::file::reader::SerializedFileReader::new(file)?;
     let metadata = reader.metadata();
 
-    let mut access_plan = RowGroupAccessPlanFilter::new(
-        ParquetAccessPlan::new_all(metadata.num_row_groups())
-    );
+    let mut access_plan = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(
+        metadata.num_row_groups(),
+    ));
 
     access_plan.prune_by_statistics_with_cache(
         Some(cache.clone()),

@@ -30,7 +30,9 @@ use std::time::{Duration, SystemTime};
 
 use bitvec::prelude::*;
 use dashmap::DashMap;
-use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder};
+use datafusion_physical_plan::metrics::{
+    Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
+};
 
 /// Configuration for the condition cache
 #[derive(Debug, Clone)]
@@ -53,7 +55,7 @@ impl Default for ConditionCacheConfig {
             enable: true,
             max_size_mb: 100, // 100MB default like ClickHouse
             enable_page_cache: false,
-            ttl_seconds: 3600, // 1 hour default
+            ttl_seconds: 3600,             // 1 hour default
             min_selectivity_to_cache: 0.9, // Don't cache if >90% rows match
         }
     }
@@ -174,14 +176,12 @@ impl ConditionCacheMetrics {
                 .counter("row_group_cache_hits", 0),
             row_group_cache_misses: MetricBuilder::new(metrics)
                 .counter("row_group_cache_misses", 0),
-            page_cache_hits: MetricBuilder::new(metrics)
-                .counter("page_cache_hits", 0),
+            page_cache_hits: MetricBuilder::new(metrics).counter("page_cache_hits", 0),
             page_cache_misses: MetricBuilder::new(metrics)
                 .counter("page_cache_misses", 0),
             memory_usage_bytes: MetricBuilder::new(metrics)
                 .gauge("cache_memory_bytes", 0),
-            evictions: MetricBuilder::new(metrics)
-                .counter("cache_evictions", 0),
+            evictions: MetricBuilder::new(metrics).counter("cache_evictions", 0),
         }
     }
 }
@@ -257,10 +257,14 @@ impl ParquetConditionCache {
         // Insert and update memory usage
         if let Some(old_entry) = self.row_group_cache.insert(key.clone(), entry.clone()) {
             // Subtract old entry size
-            self.memory_usage_bytes.fetch_sub(old_entry.size_bytes, Ordering::Relaxed);
+            self.memory_usage_bytes
+                .fetch_sub(old_entry.size_bytes, Ordering::Relaxed);
         }
-        self.memory_usage_bytes.fetch_add(size_bytes, Ordering::Relaxed);
-        self.metrics.memory_usage_bytes.set(self.memory_usage_bytes.load(Ordering::Relaxed));
+        self.memory_usage_bytes
+            .fetch_add(size_bytes, Ordering::Relaxed);
+        self.metrics
+            .memory_usage_bytes
+            .set(self.memory_usage_bytes.load(Ordering::Relaxed));
     }
 
     /// Get a page bitmap from the cache
@@ -306,10 +310,14 @@ impl ParquetConditionCache {
 
         // Insert and update memory usage
         if let Some(old_entry) = self.page_cache.insert(key.clone(), entry.clone()) {
-            self.memory_usage_bytes.fetch_sub(old_entry.size_bytes, Ordering::Relaxed);
+            self.memory_usage_bytes
+                .fetch_sub(old_entry.size_bytes, Ordering::Relaxed);
         }
-        self.memory_usage_bytes.fetch_add(size_bytes, Ordering::Relaxed);
-        self.metrics.memory_usage_bytes.set(self.memory_usage_bytes.load(Ordering::Relaxed));
+        self.memory_usage_bytes
+            .fetch_add(size_bytes, Ordering::Relaxed);
+        self.metrics
+            .memory_usage_bytes
+            .set(self.memory_usage_bytes.load(Ordering::Relaxed));
     }
 
     /// Clear all cache entries
@@ -369,7 +377,7 @@ impl ParquetConditionCache {
                 } else {
                     0.0
                 }
-            }
+            },
         }
     }
 
@@ -398,7 +406,9 @@ impl ParquetConditionCache {
         // First evict from page cache (more granular, likely larger)
         if self.config.enable_page_cache {
             // Find oldest entries - DashMap iteration is lock-free
-            let mut entries: Vec<_> = self.page_cache.iter()
+            let mut entries: Vec<_> = self
+                .page_cache
+                .iter()
                 .map(|entry| {
                     let key = entry.key().clone();
                     let created = entry.value().created_at;
@@ -422,7 +432,9 @@ impl ParquetConditionCache {
         if evicted < bytes_to_evict {
             // DashMap doesn't provide easy iteration with ordering,
             // so we collect all entries first
-            let entries: Vec<_> = self.row_group_cache.iter()
+            let entries: Vec<_> = self
+                .row_group_cache
+                .iter()
                 .map(|entry| {
                     let key = entry.key().clone();
                     let created = entry.value().created_at;
@@ -444,8 +456,11 @@ impl ParquetConditionCache {
             }
         }
 
-        self.memory_usage_bytes.fetch_sub(evicted, Ordering::Relaxed);
-        self.metrics.memory_usage_bytes.set(self.memory_usage_bytes.load(Ordering::Relaxed));
+        self.memory_usage_bytes
+            .fetch_sub(evicted, Ordering::Relaxed);
+        self.metrics
+            .memory_usage_bytes
+            .set(self.memory_usage_bytes.load(Ordering::Relaxed));
     }
 }
 

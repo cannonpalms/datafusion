@@ -381,4 +381,3 @@ mod tests {
         assert_eq!(columns[1].name(), "b");
     }
 }
-
