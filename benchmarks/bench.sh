@@ -1029,7 +1029,7 @@ run_h2o() {
 
     # Run the benchmark using the dynamically constructed file path and query file
     debug_run $CARGO_COMMAND --bin dfbench -- h2o \
-        --iterations 3 \
+        --iterations ${ITERATIONS} \
         --path "${H2O_DIR}/${FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
         -o "${RESULTS_FILE}" \
@@ -1081,7 +1081,7 @@ h2o_runner() {
     QUERY_FILE="${SCRIPT_DIR}/queries/h2o/${RUN_Type}.sql"
 
     debug_run $CARGO_COMMAND --bin dfbench -- h2o \
-        --iterations 3 \
+        --iterations ${ITERATIONS} \
         --join-paths "${H2O_DIR}/${X_TABLE_FILE_NAME},${H2O_DIR}/${SMALL_TABLE_FILE_NAME},${H2O_DIR}/${MEDIUM_TABLE_FILE_NAME},${H2O_DIR}/${LARGE_TABLE_FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
         -o "${RESULTS_FILE}" \
