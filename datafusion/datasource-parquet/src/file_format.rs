@@ -59,6 +59,7 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
+use crate::condition_cache::ParquetConditionCache;
 use crate::reader::CachedParquetFileReaderFactory;
 use crate::source::{parse_coerce_int96_string, ParquetSource};
 use async_trait::async_trait;
@@ -475,9 +476,12 @@ impl FileFormat for ParquetFormat {
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
         // Add the condition cache if available
-        // Note: This is a workaround to access the cache from SessionState.
-        // Since SessionState implements Session trait, we can downcast to access the cache.
-        // However, this creates a circular dependency which we need to resolve differently.
+        // Get the cache through the Session trait and downcast it
+        if let Some(cache_any) = state.parquet_condition_cache() {
+            if let Ok(condition_cache) = cache_any.downcast::<ParquetConditionCache>() {
+                source = source.with_condition_cache(condition_cache);
+            }
+        }
 
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)

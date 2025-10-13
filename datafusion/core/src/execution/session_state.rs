@@ -287,6 +287,10 @@ impl Session for SessionState {
     fn task_ctx(&self) -> Arc<TaskContext> {
         self.task_ctx()
     }
+
+    fn parquet_condition_cache(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.parquet_condition_cache.clone().map(|cache| cache as Arc<dyn Any + Send + Sync>)
+    }
 }
 
 impl SessionState {
@@ -738,6 +742,16 @@ impl SessionState {
     /// Return the Parquet condition cache if enabled
     pub fn parquet_condition_cache(&self) -> Option<Arc<ParquetConditionCache>> {
         self.parquet_condition_cache.clone()
+    }
+
+    /// Get cache statistics if cache is enabled
+    pub fn parquet_cache_stats(&self) -> Option<datafusion_datasource_parquet::condition_cache::CacheStatistics> {
+        self.parquet_condition_cache.as_ref().map(|cache| cache.get_stats())
+    }
+
+    /// Get cache hit rate if cache is enabled
+    pub fn parquet_cache_hit_rate(&self) -> Option<datafusion_datasource_parquet::condition_cache::CacheHitRate> {
+        self.parquet_condition_cache.as_ref().map(|cache| cache.hit_rate())
     }
 
     /// Return the mutable [`SessionConfig`].

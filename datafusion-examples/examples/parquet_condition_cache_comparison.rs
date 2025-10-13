@@ -27,6 +27,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::execution::config::SessionConfig;
+use datafusion::parquet::arrow::ArrowWriter;
+use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
 use datafusion::prelude::*;
 use tempfile::tempdir;
 
@@ -132,7 +134,7 @@ async fn main() -> Result<()> {
     for (name, query) in &queries {
         let start = Instant::now();
         let df = ctx_with_cache.sql(query).await?;
-        let results = df.collect().await?;
+        let _results = df.collect().await?;
         let elapsed = start.elapsed();
         first_run_times.push(elapsed);
         println!("  {}: {:?}", name, elapsed);
@@ -176,6 +178,45 @@ async fn main() -> Result<()> {
     }
 
     let num_row_groups = 100;  // Number of row groups in the dataset
+
+    // Get actual cache metrics from the SessionState
+    println!();
+    println!("Cache Metrics (Actual from SessionState):");
+    println!("{}", "=".repeat(60));
+
+    // Get cache statistics from the session
+    let state = ctx_with_cache.state();
+    if let Some(cache_stats) = state.parquet_cache_stats() {
+        println!("Row Group Cache:");
+        println!("  Hits: {}", cache_stats.row_group_hits);
+        println!("  Misses: {}", cache_stats.row_group_misses);
+        println!("  Entries: {}", cache_stats.row_group_entries);
+
+        println!();
+        println!("Page Cache:");
+        println!("  Hits: {}", cache_stats.page_hits);
+        println!("  Misses: {}", cache_stats.page_misses);
+        println!("  Entries: {}", cache_stats.page_entries);
+
+        println!();
+        println!("Memory Usage:");
+        println!("  Total memory used: {} bytes", cache_stats.memory_usage_bytes);
+        println!("  Cache capacity: {} MB", cache_stats.config.max_size_mb);
+        if cache_stats.config.max_size_mb > 0 {
+            let utilization = (cache_stats.memory_usage_bytes as f64 / (cache_stats.config.max_size_mb * 1024 * 1024) as f64) * 100.0;
+            println!("  Utilization: {:.4}%", utilization);
+        }
+        println!("  Evictions: {}", cache_stats.evictions);
+    }
+
+    // Get hit rate statistics
+    if let Some(hit_rate) = state.parquet_cache_hit_rate() {
+        println!();
+        println!("Cache Hit Rates:");
+        println!("  Row Group: {:.1}%", hit_rate.row_group_hit_rate);
+        println!("  Page: {:.1}%", hit_rate.page_hit_rate);
+        println!("  Overall: {:.1}%", hit_rate.overall_hit_rate);
+    }
 
     println!();
     println!("Cache Effectiveness Analysis:");
@@ -265,13 +306,23 @@ async fn create_sample_parquet_file(ctx: &SessionContext, path: &std::path::Path
             category_vec.push(categories[(id as usize) % categories.len()]);
             subcategory_vec.push(subcategories[(id as usize / 7) % subcategories.len()]);
 
-            // Create varied value distribution
-            let value = if id % 100 < 10 {
-                // 10% of values are high (for selectivity testing)
+            // Create varied value distribution with locality for row group pruning
+            // Row groups 0-9 (first 100k rows) have only high values
+            // Row groups 10-89 (next 800k rows) have only low values
+            // Row groups 90-99 (last 100k rows) have mixed values
+            let value = if batch_idx < 10 {
+                // First 10% of row groups have high values only
                 1000.0 + (id as f64 * 17.0) % 5000.0
-            } else {
-                // 90% of values are normal range
+            } else if batch_idx < 90 {
+                // Middle 80% of row groups have low values only
                 (id as f64 * 13.0) % 500.0
+            } else {
+                // Last 10% of row groups have mixed values
+                if id % 2 == 0 {
+                    1000.0 + (id as f64 * 17.0) % 5000.0
+                } else {
+                    (id as f64 * 13.0) % 500.0
+                }
             };
             values.push(value);
 
@@ -315,18 +366,25 @@ async fn create_sample_parquet_file(ctx: &SessionContext, path: &std::path::Path
     }
     println!(" Done!");
 
-    // Create a DataFrame from the batches
-    let df = ctx.read_batches(all_batches)?;
-
     // Write to Parquet file with specific row group size and page size
     // This ensures we get many row groups AND multiple pages per row group
     println!("Writing to Parquet file...");
-    df.write_parquet(
-        path.to_str().unwrap(),
-        DataFrameWriteOptions::new()
-            .with_single_file_output(true),
-        None, // Use default WriterProperties for now
-    ).await?;
+
+    // Configure writer properties to create multiple row groups
+    let props = WriterProperties::builder()
+        .set_max_row_group_size(rows_per_group)  // 10,000 rows per group
+        .set_data_page_row_count_limit(1000)     // 1,000 rows per page
+        .set_writer_version(WriterVersion::PARQUET_2_0)
+        .build();
+
+    // Write using ArrowWriter to control row group size
+    let mut file = std::fs::File::create(path)?;
+    let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), Some(props))?;
+
+    for batch in all_batches {
+        writer.write(&batch)?;
+    }
+    writer.close()?;
 
     // Get file size
     let metadata = std::fs::metadata(path)?;

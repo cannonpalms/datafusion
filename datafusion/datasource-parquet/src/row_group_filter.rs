@@ -18,9 +18,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::{ParquetAccessPlan, ParquetFileMetrics};
 use super::condition_cache::{ParquetConditionCache, RowGroupCacheKey};
 use super::predicate_hash::hash_predicate;
+use super::{ParquetAccessPlan, ParquetFileMetrics};
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::Schema;
 use bitvec::prelude::*;
@@ -125,7 +125,8 @@ impl RowGroupAccessPlanFilter {
         if let Some(cache) = cache {
             if let Some(file_meta) = file_metadata {
                 let predicate_hash = hash_predicate(predicate.orig_expr().as_ref());
-                let file_version = file_meta.created_by()
+                let file_version = file_meta
+                    .created_by()
                     .as_deref()
                     .unwrap_or("")
                     .bytes()
@@ -177,7 +178,8 @@ impl RowGroupAccessPlanFilter {
                 match predicate.prune(&pruning_stats) {
                     Ok(values) => {
                         // Update bitmap and access plan
-                        for (&idx, &value) in row_group_indexes.iter().zip(values.iter()) {
+                        for (&idx, &value) in row_group_indexes.iter().zip(values.iter())
+                        {
                             bitmap.set(idx, value);
                             if !value {
                                 self.access_plan.skip(idx);
@@ -197,11 +199,23 @@ impl RowGroupAccessPlanFilter {
                 }
             } else {
                 // No file metadata available, fall back to regular pruning
-                self.prune_by_statistics(arrow_schema, parquet_schema, groups, predicate, metrics);
+                self.prune_by_statistics(
+                    arrow_schema,
+                    parquet_schema,
+                    groups,
+                    predicate,
+                    metrics,
+                );
             }
         } else {
             // No cache provided, use regular pruning
-            self.prune_by_statistics(arrow_schema, parquet_schema, groups, predicate, metrics);
+            self.prune_by_statistics(
+                arrow_schema,
+                parquet_schema,
+                groups,
+                predicate,
+                metrics,
+            );
         }
     }
 

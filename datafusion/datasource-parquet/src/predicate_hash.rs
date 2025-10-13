@@ -20,10 +20,9 @@
 //! This module provides functionality to normalize and hash predicates
 //! to maximize cache hits across similar queries.
 
-use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
-use datafusion_common::{Column, ScalarValue};
+use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column as PhysicalColumn, InListExpr, IsNotNullExpr,
@@ -46,7 +45,58 @@ pub fn hash_predicate(expr: &dyn PhysicalExpr) -> u64 {
     hasher.finish()
 }
 
-/// Hash an expression tree recursively
+/// Hash an expression tree recursively without normalization (for ordering)
+fn hash_expr_tree_no_normalize<H: Hasher>(expr: &dyn PhysicalExpr, hasher: &mut H) {
+    // Hash the expression type
+    let expr_type = expr_type_id(expr);
+    expr_type.hash(hasher);
+
+    // Handle specific expression types
+    if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+        // Hash operator
+        format!("{:?}", binary.op()).hash(hasher);
+        // Always hash in original order (no normalization)
+        hash_expr_tree_no_normalize(binary.left().as_ref(), hasher);
+        hash_expr_tree_no_normalize(binary.right().as_ref(), hasher);
+    } else if let Some(column) = expr.as_any().downcast_ref::<PhysicalColumn>() {
+        column.name().hash(hasher);
+        column.index().hash(hasher);
+    } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+        hash_scalar_value(literal.value(), hasher);
+    } else if let Some(in_list) = expr.as_any().downcast_ref::<InListExpr>() {
+        hash_expr_tree_no_normalize(in_list.expr().as_ref(), hasher);
+        for item in in_list.list() {
+            hash_expr_tree_no_normalize(item.as_ref(), hasher);
+        }
+        in_list.negated().hash(hasher);
+    } else if let Some(is_null) = expr.as_any().downcast_ref::<IsNullExpr>() {
+        hash_expr_tree_no_normalize(is_null.arg().as_ref(), hasher);
+    } else if let Some(is_not_null) = expr.as_any().downcast_ref::<IsNotNullExpr>() {
+        hash_expr_tree_no_normalize(is_not_null.arg().as_ref(), hasher);
+    } else if let Some(not_expr) = expr.as_any().downcast_ref::<NotExpr>() {
+        hash_expr_tree_no_normalize(not_expr.arg().as_ref(), hasher);
+    } else if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
+        hash_expr_tree_no_normalize(cast.expr().as_ref(), hasher);
+        format!("{:?}", cast.cast_type()).hash(hasher);
+    } else if let Some(case) = expr.as_any().downcast_ref::<CaseExpr>() {
+        if let Some(base) = case.expr() {
+            hash_expr_tree_no_normalize(base.as_ref(), hasher);
+        }
+        for (when_expr, then_expr) in case.when_then_expr() {
+            hash_expr_tree_no_normalize(when_expr.as_ref(), hasher);
+            hash_expr_tree_no_normalize(then_expr.as_ref(), hasher);
+        }
+        if let Some(else_expr) = case.else_expr() {
+            hash_expr_tree_no_normalize(else_expr.as_ref(), hasher);
+        }
+    } else {
+        // For other expression types, hash the debug representation
+        let debug_str = format!("{:?}", expr);
+        debug_str.hash(hasher);
+    }
+}
+
+/// Hash an expression tree recursively with normalization
 fn hash_expr_tree<H: Hasher>(expr: &dyn PhysicalExpr, hasher: &mut H) {
     // Hash the expression type
     let expr_type = expr_type_id(expr);
@@ -59,9 +109,19 @@ fn hash_expr_tree<H: Hasher>(expr: &dyn PhysicalExpr, hasher: &mut H) {
 
         // For commutative operations, sort the operands before hashing
         if is_commutative(binary.op()) {
-            let left_hash = hash_single_expr(binary.left().as_ref());
-            let right_hash = hash_single_expr(binary.right().as_ref());
+            // Use non-normalizing hash for ordering to avoid exponential behavior
+            let left_hash = {
+                let mut hasher = FxHasher::default();
+                hash_expr_tree_no_normalize(binary.left().as_ref(), &mut hasher);
+                hasher.finish()
+            };
+            let right_hash = {
+                let mut hasher = FxHasher::default();
+                hash_expr_tree_no_normalize(binary.right().as_ref(), &mut hasher);
+                hasher.finish()
+            };
 
+            // Now hash the subtrees in sorted order (with normalization)
             if left_hash <= right_hash {
                 hash_expr_tree(binary.left().as_ref(), hasher);
                 hash_expr_tree(binary.right().as_ref(), hasher);
@@ -83,9 +143,14 @@ fn hash_expr_tree<H: Hasher>(expr: &dyn PhysicalExpr, hasher: &mut H) {
         hash_expr_tree(in_list.expr().as_ref(), hasher);
 
         // Sort and hash the list values
-        let mut list_hashes: Vec<u64> = in_list.list()
+        let mut list_hashes: Vec<u64> = in_list
+            .list()
             .iter()
-            .map(|e| hash_single_expr(e.as_ref()))
+            .map(|e| {
+                let mut hasher = FxHasher::default();
+                hash_expr_tree_no_normalize(e.as_ref(), &mut hasher);
+                hasher.finish()
+            })
             .collect();
         list_hashes.sort_unstable();
 
@@ -124,13 +189,6 @@ fn hash_expr_tree<H: Hasher>(expr: &dyn PhysicalExpr, hasher: &mut H) {
         let debug_str = format!("{:?}", expr);
         debug_str.hash(hasher);
     }
-}
-
-/// Get a single hash value for an expression (used for sorting)
-fn hash_single_expr(expr: &dyn PhysicalExpr) -> u64 {
-    let mut hasher = FxHasher::default();
-    hash_expr_tree(expr, &mut hasher);
-    hasher.finish()
 }
 
 /// Hash a scalar value consistently
@@ -215,34 +273,13 @@ fn expr_type_id(expr: &dyn PhysicalExpr) -> &'static str {
 fn is_commutative(op: &Operator) -> bool {
     matches!(
         op,
-        Operator::Eq | Operator::NotEq | Operator::And | Operator::Or | Operator::Plus | Operator::Multiply
+        Operator::Eq
+            | Operator::NotEq
+            | Operator::And
+            | Operator::Or
+            | Operator::Plus
+            | Operator::Multiply
     )
-}
-
-/// Extract all columns referenced in a predicate
-pub fn extract_columns(expr: &dyn PhysicalExpr) -> Vec<Column> {
-    let mut columns = BTreeMap::new();
-    collect_columns_recursive(expr, &mut columns);
-    columns.into_values().collect()
-}
-
-/// Recursively collect columns from an expression tree
-fn collect_columns_recursive(
-    expr: &dyn PhysicalExpr,
-    columns: &mut BTreeMap<String, Column>,
-) {
-    // Check if this node is a column
-    if let Some(column) = expr.as_any().downcast_ref::<PhysicalColumn>() {
-        columns.insert(
-            column.name().to_string(),
-            Column::new_unqualified(column.name()),
-        );
-    }
-
-    // Recursively process children
-    for child in expr.children() {
-        collect_columns_recursive(child.as_ref(), columns);
-    }
 }
 
 #[cfg(test)]
@@ -255,19 +292,13 @@ mod tests {
     #[test]
     fn test_hash_predicate_deterministic() {
         // Create a test schema
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-        ]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
 
         // Create a simple predicate: column = 5
         let col = expressions::col("a", &schema).unwrap();
         let lit = expressions::lit(ScalarValue::Int32(Some(5)));
-        let expr = expressions::binary(
-            col.clone(),
-            Operator::Eq,
-            lit.clone(),
-            &schema,
-        ).unwrap();
+        let expr =
+            expressions::binary(col.clone(), Operator::Eq, lit.clone(), &schema).unwrap();
 
         // Hash should be deterministic
         let hash1 = hash_predicate(expr.as_ref());
@@ -288,20 +319,14 @@ mod tests {
         let col_b = expressions::col("b", &schema).unwrap();
 
         // a AND b
-        let expr1 = expressions::binary(
-            col_a.clone(),
-            Operator::And,
-            col_b.clone(),
-            &schema,
-        ).unwrap();
+        let expr1 =
+            expressions::binary(col_a.clone(), Operator::And, col_b.clone(), &schema)
+                .unwrap();
 
         // b AND a
-        let expr2 = expressions::binary(
-            col_b.clone(),
-            Operator::And,
-            col_a.clone(),
-            &schema,
-        ).unwrap();
+        let expr2 =
+            expressions::binary(col_b.clone(), Operator::And, col_a.clone(), &schema)
+                .unwrap();
 
         // Hashes should be the same for commutative operations
         let hash1 = hash_predicate(expr1.as_ref());
@@ -312,28 +337,17 @@ mod tests {
     #[test]
     fn test_hash_different_predicates() {
         // Create a test schema
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-        ]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
 
         // Create different predicates
         let col = expressions::col("a", &schema).unwrap();
         let lit5 = expressions::lit(ScalarValue::Int32(Some(5)));
         let lit10 = expressions::lit(ScalarValue::Int32(Some(10)));
 
-        let expr1 = expressions::binary(
-            col.clone(),
-            Operator::Eq,
-            lit5,
-            &schema,
-        ).unwrap();
+        let expr1 =
+            expressions::binary(col.clone(), Operator::Eq, lit5, &schema).unwrap();
 
-        let expr2 = expressions::binary(
-            col,
-            Operator::Eq,
-            lit10,
-            &schema,
-        ).unwrap();
+        let expr2 = expressions::binary(col, Operator::Eq, lit10, &schema).unwrap();
 
         // Different predicates should have different hashes
         let hash1 = hash_predicate(expr1.as_ref());
@@ -355,26 +369,11 @@ mod tests {
         let lit5 = expressions::lit(ScalarValue::Int32(Some(5)));
         let lit_test = expressions::lit(ScalarValue::Utf8(Some("test".to_string())));
 
-        let left = expressions::binary(
-            col_a,
-            Operator::Gt,
-            lit5,
-            &schema,
-        ).unwrap();
+        let left = expressions::binary(col_a, Operator::Gt, lit5, &schema).unwrap();
 
-        let right = expressions::binary(
-            col_b,
-            Operator::Eq,
-            lit_test,
-            &schema,
-        ).unwrap();
+        let right = expressions::binary(col_b, Operator::Eq, lit_test, &schema).unwrap();
 
-        let expr = expressions::binary(
-            left,
-            Operator::And,
-            right,
-            &schema,
-        ).unwrap();
+        let expr = expressions::binary(left, Operator::And, right, &schema).unwrap();
 
         let columns = extract_columns(expr.as_ref());
         assert_eq!(columns.len(), 2);
@@ -382,3 +381,4 @@ mod tests {
         assert_eq!(columns[1].name(), "b");
     }
 }
+

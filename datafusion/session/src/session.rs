@@ -135,6 +135,12 @@ pub trait Session: Send + Sync {
 
     /// Get a new TaskContext to run in this session
     fn task_ctx(&self) -> Arc<TaskContext>;
+
+    /// Return the Parquet condition cache if enabled
+    /// This is an optional method that returns None by default
+    fn parquet_condition_cache(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        None
+    }
 }
 
 /// Create a new task context instance from Session

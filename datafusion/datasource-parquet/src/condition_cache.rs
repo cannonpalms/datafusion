@@ -31,8 +31,6 @@ use std::time::{Duration, SystemTime};
 use bitvec::prelude::*;
 use dashmap::DashMap;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder};
-use parking_lot::RwLock;
-use rustc_hash::FxHashMap;
 
 /// Configuration for the condition cache
 #[derive(Debug, Clone)]
@@ -105,7 +103,8 @@ pub struct ParquetConditionCache {
 
     /// Page level cache (fine-grained)
     /// BitVec where each bit represents whether a page contains matching rows
-    page_cache: RwLock<FxHashMap<PageCacheKey, CacheEntry<BitVec>>>,
+    /// Using DashMap for lock-free concurrent access
+    page_cache: DashMap<PageCacheKey, CacheEntry<BitVec>>,
 
     /// Configuration
     config: ConditionCacheConfig,
@@ -134,6 +133,40 @@ pub struct ConditionCacheMetrics {
     pub evictions: Count,
 }
 
+/// Cache statistics snapshot
+#[derive(Debug, Clone)]
+pub struct CacheStatistics {
+    /// Number of row group cache hits
+    pub row_group_hits: usize,
+    /// Number of row group cache misses
+    pub row_group_misses: usize,
+    /// Number of page cache hits
+    pub page_hits: usize,
+    /// Number of page cache misses
+    pub page_misses: usize,
+    /// Current memory usage in bytes
+    pub memory_usage_bytes: usize,
+    /// Number of evictions
+    pub evictions: usize,
+    /// Number of entries in row group cache
+    pub row_group_entries: usize,
+    /// Number of entries in page cache
+    pub page_entries: usize,
+    /// Cache configuration
+    pub config: ConditionCacheConfig,
+}
+
+/// Cache hit rate statistics
+#[derive(Debug, Clone)]
+pub struct CacheHitRate {
+    /// Row group cache hit rate percentage
+    pub row_group_hit_rate: f64,
+    /// Page cache hit rate percentage
+    pub page_hit_rate: f64,
+    /// Overall cache hit rate percentage
+    pub overall_hit_rate: f64,
+}
+
 impl ConditionCacheMetrics {
     pub fn new(metrics: &ExecutionPlanMetricsSet) -> Self {
         Self {
@@ -158,7 +191,7 @@ impl ParquetConditionCache {
     pub fn new(config: ConditionCacheConfig, metrics: &ExecutionPlanMetricsSet) -> Self {
         Self {
             row_group_cache: DashMap::new(),
-            page_cache: RwLock::new(FxHashMap::default()),
+            page_cache: DashMap::new(),
             config,
             memory_usage_bytes: AtomicUsize::new(0),
             metrics: ConditionCacheMetrics::new(metrics),
@@ -222,7 +255,7 @@ impl ParquetConditionCache {
         };
 
         // Insert and update memory usage
-        if let Some(old_entry) = self.row_group_cache.insert(key, entry.clone()) {
+        if let Some(old_entry) = self.row_group_cache.insert(key.clone(), entry.clone()) {
             // Subtract old entry size
             self.memory_usage_bytes.fetch_sub(old_entry.size_bytes, Ordering::Relaxed);
         }
@@ -236,13 +269,16 @@ impl ParquetConditionCache {
             return None;
         }
 
-        let cache = self.page_cache.read();
-        if let Some(entry) = cache.get(key) {
+        if let Some(entry) = self.page_cache.get(key) {
             // Check TTL
             if let Ok(elapsed) = entry.created_at.elapsed() {
                 if elapsed < Duration::from_secs(self.config.ttl_seconds) {
                     self.metrics.page_cache_hits.add(1);
                     return Some(entry.data.clone());
+                } else {
+                    // Entry expired, remove it
+                    drop(entry);
+                    self.page_cache.remove(key);
                 }
             }
         }
@@ -268,8 +304,8 @@ impl ParquetConditionCache {
             size_bytes,
         };
 
-        let mut cache = self.page_cache.write();
-        if let Some(old_entry) = cache.insert(key, entry.clone()) {
+        // Insert and update memory usage
+        if let Some(old_entry) = self.page_cache.insert(key.clone(), entry.clone()) {
             self.memory_usage_bytes.fetch_sub(old_entry.size_bytes, Ordering::Relaxed);
         }
         self.memory_usage_bytes.fetch_add(size_bytes, Ordering::Relaxed);
@@ -279,7 +315,7 @@ impl ParquetConditionCache {
     /// Clear all cache entries
     pub fn clear(&self) {
         self.row_group_cache.clear();
-        self.page_cache.write().clear();
+        self.page_cache.clear();
         self.memory_usage_bytes.store(0, Ordering::Relaxed);
         self.metrics.memory_usage_bytes.set(0);
     }
@@ -287,6 +323,54 @@ impl ParquetConditionCache {
     /// Get current memory usage in bytes
     pub fn memory_usage_bytes(&self) -> usize {
         self.memory_usage_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Get cache statistics
+    pub fn get_stats(&self) -> CacheStatistics {
+        CacheStatistics {
+            row_group_hits: self.metrics.row_group_cache_hits.value(),
+            row_group_misses: self.metrics.row_group_cache_misses.value(),
+            page_hits: self.metrics.page_cache_hits.value(),
+            page_misses: self.metrics.page_cache_misses.value(),
+            memory_usage_bytes: self.memory_usage_bytes.load(Ordering::Relaxed),
+            evictions: self.metrics.evictions.value(),
+            row_group_entries: self.row_group_cache.len(),
+            page_entries: self.page_cache.len(),
+            config: self.config.clone(),
+        }
+    }
+
+    /// Get hit rate statistics
+    pub fn hit_rate(&self) -> CacheHitRate {
+        let rg_hits = self.metrics.row_group_cache_hits.value();
+        let rg_misses = self.metrics.row_group_cache_misses.value();
+        let rg_total = rg_hits + rg_misses;
+
+        let page_hits = self.metrics.page_cache_hits.value();
+        let page_misses = self.metrics.page_cache_misses.value();
+        let page_total = page_hits + page_misses;
+
+        CacheHitRate {
+            row_group_hit_rate: if rg_total > 0 {
+                (rg_hits as f64 / rg_total as f64) * 100.0
+            } else {
+                0.0
+            },
+            page_hit_rate: if page_total > 0 {
+                (page_hits as f64 / page_total as f64) * 100.0
+            } else {
+                0.0
+            },
+            overall_hit_rate: {
+                let total_hits = rg_hits + page_hits;
+                let total_requests = rg_total + page_total;
+                if total_requests > 0 {
+                    (total_hits as f64 / total_requests as f64) * 100.0
+                } else {
+                    0.0
+                }
+            }
+        }
     }
 
     /// Estimate memory usage of a bitmap
@@ -313,11 +397,14 @@ impl ParquetConditionCache {
 
         // First evict from page cache (more granular, likely larger)
         if self.config.enable_page_cache {
-            let mut cache = self.page_cache.write();
-
-            // Find oldest entries
-            let mut entries: Vec<_> = cache.iter()
-                .map(|(k, v)| (k.clone(), v.created_at, v.size_bytes))
+            // Find oldest entries - DashMap iteration is lock-free
+            let mut entries: Vec<_> = self.page_cache.iter()
+                .map(|entry| {
+                    let key = entry.key().clone();
+                    let created = entry.value().created_at;
+                    let size = entry.value().size_bytes;
+                    (key, created, size)
+                })
                 .collect();
             entries.sort_by_key(|(_, created, _)| *created);
 
@@ -325,7 +412,7 @@ impl ParquetConditionCache {
                 if evicted >= bytes_to_evict {
                     break;
                 }
-                cache.remove(&key);
+                self.page_cache.remove(&key);
                 evicted += size;
                 self.metrics.evictions.add(1);
             }

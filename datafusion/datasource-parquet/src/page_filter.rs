@@ -35,7 +35,7 @@ use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 use datafusion_pruning::PruningPredicate;
 
-use log::{debug, trace};
+use log::trace;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
 use parquet::format::PageLocation;
@@ -132,18 +132,18 @@ impl PagePruningAccessPlanFilter {
                 ) {
                     Ok(pp) => pp,
                     Err(e) => {
-                        debug!("Ignoring error creating page pruning predicate: {e}");
+                        trace!("Ignoring error creating page pruning predicate: {e}");
                         return None;
                     }
                 };
 
                 if pp.always_true() {
-                    debug!("Ignoring always true page pruning predicate: {predicate}");
+                    trace!("Ignoring always true page pruning predicate: {predicate}");
                     return None;
                 }
 
                 if pp.required_columns().single_column().is_none() {
-                    debug!("Ignoring multi-column page pruning predicate: {predicate}");
+                    trace!("Ignoring multi-column page pruning predicate: {predicate}");
                     return None;
                 }
 
@@ -181,7 +181,7 @@ impl PagePruningAccessPlanFilter {
         if parquet_metadata.offset_index().is_none()
             || parquet_metadata.column_index().is_none()
         {
-            debug!(
+            trace!(
                     "Can not prune pages due to lack of indexes. Have offset: {}, column index: {}",
                     parquet_metadata.offset_index().is_some(), parquet_metadata.column_index().is_some()
                 );
@@ -213,7 +213,7 @@ impl PagePruningAccessPlanFilter {
                 let converter = match converter {
                     Ok(converter) => converter,
                     Err(e) => {
-                        debug!(
+                        trace!(
                             "Could not create statistics converter for column {}: {e}",
                             column.name()
                         );
@@ -236,7 +236,7 @@ impl PagePruningAccessPlanFilter {
                     continue;
                 };
 
-                debug!("Use filter and page index to create RowSelection {:?} from predicate: {:?}",
+                trace!("Use filter and page index to create RowSelection {:?} from predicate: {:?}",
                     &selection,
                     predicate.predicate_expr(),
                 );
@@ -374,7 +374,7 @@ fn prune_pages_in_one_row_group(
     let values = match pruning_predicate.prune(&pruning_stats) {
         Ok(values) => values,
         Err(e) => {
-            debug!("Error evaluating page index predicate values {e}");
+            trace!("Error evaluating page index predicate values {e}");
             metrics.predicate_evaluation_errors.add(1);
             return None;
         }
@@ -383,7 +383,7 @@ fn prune_pages_in_one_row_group(
     // Convert the information of which pages to skip into a RowSelection
     // that describes the ranges of rows to skip.
     let Some(page_row_counts) = pruning_stats.page_row_counts() else {
-        debug!(
+        trace!(
             "Can not determine page row counts for row group {row_group_index}, skipping"
         );
         metrics.predicate_evaluation_errors.add(1);
@@ -531,7 +531,7 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
         ) {
             Ok(min_values) => Some(min_values),
             Err(e) => {
-                debug!("Error evaluating data page min values {e}");
+                trace!("Error evaluating data page min values {e}");
                 None
             }
         }
@@ -545,7 +545,7 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
         ) {
             Ok(min_values) => Some(min_values),
             Err(e) => {
-                debug!("Error evaluating data page max values {e}");
+                trace!("Error evaluating data page max values {e}");
                 None
             }
         }
@@ -563,7 +563,7 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
         ) {
             Ok(null_counts) => Some(Arc::new(null_counts)),
             Err(e) => {
-                debug!("Error evaluating data page null counts {e}");
+                trace!("Error evaluating data page null counts {e}");
                 None
             }
         }
@@ -577,7 +577,7 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
         ) {
             Ok(row_counts) => row_counts.map(|a| Arc::new(a) as ArrayRef),
             Err(e) => {
-                debug!("Error evaluating data page row counts {e}");
+                trace!("Error evaluating data page row counts {e}");
                 None
             }
         }
