@@ -77,7 +77,7 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -209,7 +209,7 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &BooleanGroupValueBuilder<true>,
+        let equal_to = |builder: &mut BooleanGroupValueBuilder<true>,
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
@@ -233,7 +233,7 @@ mod tests {
                 .unwrap();
         };
 
-        let equal_to = |builder: &BooleanGroupValueBuilder<true>,
+        let equal_to = |builder: &mut BooleanGroupValueBuilder<true>,
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
@@ -253,7 +253,7 @@ mod tests {
     where
         A: FnMut(&mut BooleanGroupValueBuilder<true>, &ArrayRef, &[usize]),
         E: FnMut(
-            &BooleanGroupValueBuilder<true>,
+            &mut BooleanGroupValueBuilder<true>,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -304,7 +304,7 @@ mod tests {
         // Check
         let mut equal_to_results = vec![true; builder.len()];
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1, 2, 3, 4, 5],
             &input_array,
             &[0, 1, 2, 3, 4, 5],
@@ -329,7 +329,7 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &BooleanGroupValueBuilder<false>,
+        let equal_to = |builder: &mut BooleanGroupValueBuilder<false>,
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
@@ -353,7 +353,7 @@ mod tests {
                 .unwrap();
         };
 
-        let equal_to = |builder: &BooleanGroupValueBuilder<false>,
+        let equal_to = |builder: &mut BooleanGroupValueBuilder<false>,
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
@@ -373,7 +373,7 @@ mod tests {
     where
         A: FnMut(&mut BooleanGroupValueBuilder<false>, &ArrayRef, &[usize]),
         E: FnMut(
-            &BooleanGroupValueBuilder<false>,
+            &mut BooleanGroupValueBuilder<false>,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -405,7 +405,7 @@ mod tests {
         // Check
         let mut equal_to_results = vec![true; builder.len()];
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1, 2, 3],
             &input_array,
             &[0, 1, 2, 3],

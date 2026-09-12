@@ -509,7 +509,7 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         group_indices: &[usize],
         array: &ArrayRef,
         rows: &[usize],
@@ -623,7 +623,7 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &ByteViewGroupValueBuilder<StringViewType>,
+        let equal_to = |builder: &mut ByteViewGroupValueBuilder<StringViewType>,
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
@@ -647,7 +647,7 @@ mod tests {
                 .unwrap();
         };
 
-        let equal_to = |builder: &ByteViewGroupValueBuilder<StringViewType>,
+        let equal_to = |builder: &mut ByteViewGroupValueBuilder<StringViewType>,
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
@@ -728,7 +728,7 @@ mod tests {
     where
         A: FnMut(&mut ByteViewGroupValueBuilder<StringViewType>, &ArrayRef, &[usize]),
         E: FnMut(
-            &ByteViewGroupValueBuilder<StringViewType>,
+            &mut ByteViewGroupValueBuilder<StringViewType>,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -813,7 +813,7 @@ mod tests {
         // Check
         let mut equal_to_results = vec![true; input_array.len()];
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1, 2, 3, 4, 5, 6, 7, 7, 7, 8, 8],
             &input_array,
             &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
