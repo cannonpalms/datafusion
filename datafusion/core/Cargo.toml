@@ -198,6 +198,10 @@ name = "aggregate_query_sql"
 
 [[bench]]
 harness = false
+name = "date_bin_group_by"
+
+[[bench]]
+harness = false
 name = "csv_load"
 
 [[bench]]
