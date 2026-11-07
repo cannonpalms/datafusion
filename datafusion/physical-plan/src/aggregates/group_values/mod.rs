@@ -18,9 +18,10 @@
 //! [`GroupValues`] trait for storing and interning group keys
 
 use arrow::array::types::{
-    Date32Type, Date64Type, Decimal128Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    Date32Type, Date64Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
@@ -41,7 +42,8 @@ pub(crate) use single_group_by::primitive::HashValue;
 use crate::aggregates::{
     group_values::single_group_by::{
         boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
-        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
+        bytes_view::GroupValuesBytesView, dictionary::GroupValuesDictionary,
+        primitive::GroupValuesPrimitive,
     },
     order::GroupOrdering,
 };
@@ -195,6 +197,26 @@ pub fn new_group_values(
             }
             DataType::Boolean => {
                 return Ok(Box::new(GroupValuesBoolean::new()));
+            }
+            DataType::Dictionary(key_type, value_type)
+                if value_type.as_ref() == &DataType::Utf8 =>
+            {
+                macro_rules! dictionary_helper {
+                    ($t:ty) => {
+                        return Ok(Box::new(GroupValuesDictionary::<$t>::new()))
+                    };
+                }
+                match key_type.as_ref() {
+                    DataType::Int8 => dictionary_helper!(Int8Type),
+                    DataType::Int16 => dictionary_helper!(Int16Type),
+                    DataType::Int32 => dictionary_helper!(Int32Type),
+                    DataType::Int64 => dictionary_helper!(Int64Type),
+                    DataType::UInt8 => dictionary_helper!(UInt8Type),
+                    DataType::UInt16 => dictionary_helper!(UInt16Type),
+                    DataType::UInt32 => dictionary_helper!(UInt32Type),
+                    DataType::UInt64 => dictionary_helper!(UInt64Type),
+                    _ => {}
+                }
             }
             _ => {}
         }

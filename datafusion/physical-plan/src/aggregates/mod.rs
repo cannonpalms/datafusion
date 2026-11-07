@@ -3561,6 +3561,108 @@ mod tests {
         }
     }
 
+    /// A single `Dictionary(Int32, Utf8)` key takes `GroupValuesDictionary`.
+    /// Spilling it must give the same groups as a `Utf8` key without spilling.
+    #[tokio::test]
+    async fn single_dictionary_key_spill_matches_utf8_key() -> Result<()> {
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let dict_schema = Arc::new(Schema::new(vec![
+            Field::new("k", dict_type.clone(), true),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let utf8_schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Utf8, true),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        // Every other batch reuses the previous values array, which holds
+        // unused values, a null value and a value repeated under two keys.
+        let mut dict_batches = vec![];
+        let mut utf8_batches = vec![];
+        let mut values: ArrayRef =
+            Arc::new(arrow::array::StringArray::from(Vec::<&str>::new()));
+        for batch in 0..40usize {
+            if batch % 2 == 0 {
+                let mut v: Vec<Option<String>> = (0..60)
+                    .map(|i| Some(format!("k{}", (batch * 7 + i * 13) % 400)))
+                    .collect();
+                v[5] = None;
+                v[6] = v[7].clone();
+                values = Arc::new(arrow::array::StringArray::from(v));
+            }
+            let keys =
+                Int32Array::from_iter((0..50).map(|row| {
+                    (row % 11 != 0).then_some(((row * 17 + batch) % 50) as i32)
+                }));
+            let keys: ArrayRef =
+                Arc::new(DictionaryArray::<Int32Type>::new(keys, Arc::clone(&values)));
+            let b: ArrayRef = Arc::new(Float64Array::from_iter_values(
+                (0..50).map(|row| (batch * 50 + row) as f64),
+            ));
+            utf8_batches.push(RecordBatch::try_new(
+                Arc::clone(&utf8_schema),
+                vec![
+                    arrow::compute::cast(&keys, &DataType::Utf8)?,
+                    Arc::clone(&b),
+                ],
+            )?);
+            dict_batches.push(RecordBatch::try_new(
+                Arc::clone(&dict_schema),
+                vec![keys, b],
+            )?);
+        }
+
+        async fn run(
+            batches: Vec<RecordBatch>,
+            schema: SchemaRef,
+            task_ctx: Arc<TaskContext>,
+        ) -> Result<(Vec<RecordBatch>, Arc<AggregateExec>)> {
+            let input: Arc<dyn ExecutionPlan> =
+                TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+            let aggregates = vec![
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        datafusion_functions_aggregate::min_max::min_udaf(),
+                        vec![col("b", &schema)?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("MIN(b)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(count_udaf(), vec![col("b", &schema)?])
+                        .schema(Arc::clone(&schema))
+                        .alias("COUNT(b)")
+                        .build()?,
+                ),
+            ];
+            let aggregate = Arc::new(AggregateExec::try_new(
+                AggregateMode::Single,
+                PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]),
+                aggregates,
+                vec![None, None],
+                input,
+                schema,
+            )?);
+            let result = collect(aggregate.execute(0, task_ctx)?).await?;
+            Ok((result, aggregate))
+        }
+
+        let (expected, _) =
+            run(utf8_batches, utf8_schema, Arc::new(TaskContext::default())).await?;
+        let (actual, aggregate) =
+            run(dict_batches, dict_schema, new_spill_ctx(16, 12_000)).await?;
+
+        assert_spill_count_metric(true, aggregate);
+        assert_eq!(actual[0].schema().field(0).data_type(), &dict_type);
+        assert_eq!(
+            batches_to_sort_string(&actual),
+            batches_to_sort_string(&expected)
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_aggregate_with_spill_if_necessary() -> Result<()> {
         // test with spill
