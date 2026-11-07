@@ -348,6 +348,96 @@ fn compute_distance(time_diff: i64, stride: i64) -> i64 {
     }
 }
 
+/// Floor division of values in `0..=i64::MAX` by a fixed divisor of at least
+/// 2, as a multiply-high and a shift.
+///
+/// Hardware 64-bit division has a long latency and no SIMD form on x86_64 or
+/// aarch64, so binning millions of rows by a fixed stride avoids it.
+#[derive(Debug, Clone, Copy)]
+struct NonNegativeDivisor {
+    divisor: u64,
+    multiplier: u64,
+    shift: u32,
+}
+
+impl NonNegativeDivisor {
+    fn new(divisor: i64) -> Option<Self> {
+        if divisor < 2 {
+            return None;
+        }
+        let divisor = divisor as u64;
+        // l = ceil(log2(divisor)), m = ceil(2^(63 + l) / divisor).
+        // m * divisor - 2^(63 + l) < divisor <= 2^l, so for n < 2^63 the error
+        // n * m / 2^(63 + l) - n / divisor stays below 1 / divisor, which is
+        // too small to carry floor(n / divisor) into the next integer.
+        // divisor > 2^(l - 1) unless it is a power of two, so m fits in u64.
+        let l = u64::BITS - (divisor - 1).leading_zeros();
+        let multiplier =
+            u64::try_from((1u128 << (63 + l)).div_ceil(u128::from(divisor))).ok()?;
+        Some(Self {
+            divisor,
+            multiplier,
+            shift: l - 1,
+        })
+    }
+
+    #[inline]
+    fn div(&self, n: u64) -> u64 {
+        (((u128::from(n) * u128::from(self.multiplier)) >> 64) as u64) >> self.shift
+    }
+}
+
+/// Bins a nanosecond timestamp array without the per-row `Result` and
+/// division of [`date_bin_timestamps_general`].
+///
+/// Returns `None`, so the caller falls back to the general path, unless
+/// every valid value is at or after `origin` and at most `i64::MAX`
+/// nanoseconds after it. In that range `source - origin` cannot overflow and
+/// is non-negative, so the bin is `origin + floor(diff / stride) * stride`,
+/// exactly what [`date_bin_nanos_interval`] computes. Wrapping arithmetic
+/// only matters for the arbitrary values under nulls.
+fn date_bin_nanos_fast<T: ArrowTimestampType>(
+    array: &PrimitiveArray<T>,
+    origin: i64,
+    stride: i64,
+) -> Option<PrimitiveArray<T>> {
+    if !matches!(T::UNIT, Nanosecond) {
+        return None;
+    }
+    let divisor = NonNegativeDivisor::new(stride)?;
+    let min = arrow::compute::min(array)?;
+    let max = arrow::compute::max(array)?;
+    if min < origin {
+        return None;
+    }
+    max.checked_sub(origin)?;
+    Some(array.unary(|value| {
+        let diff = value.wrapping_sub(origin) as u64;
+        let delta = divisor.div(diff).wrapping_mul(divisor.divisor);
+        origin.wrapping_add(delta as i64)
+    }))
+}
+
+fn date_bin_timestamps_general<T: ArrowTimestampType>(
+    array: &PrimitiveArray<T>,
+    origin: i64,
+    stride: i64,
+    stride_fn: BinFunction,
+) -> Result<PrimitiveArray<T>> {
+    let scale = match T::UNIT {
+        Nanosecond => 1,
+        Microsecond => NANOS_PER_MICRO,
+        Millisecond => NANOS_PER_MILLI,
+        Second => NANOSECONDS,
+    };
+
+    Ok(array.try_unary(|val| {
+        stride_fn(stride, val * scale, origin)
+            .map(|binned| binned / scale)
+            .map_err(|e| arrow::error::ArrowError::ComputeError(e.to_string()))
+    })?)
+}
+
 // return time in nanoseconds that the source timestamp falls into based on the stride and origin
 fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> Result<i64> {
     // convert source and origin to DateTime<Utc>
@@ -571,6 +661,7 @@ fn date_bin_impl(
         }
     };
 
+    let fixed_duration = matches!(stride, Interval::Nanoseconds(_));
     let (stride, stride_fn) = stride.bin_fn();
 
     // Return error if stride is 0
@@ -687,6 +778,7 @@ fn date_bin_impl(
                 origin: i64,
                 stride: i64,
                 stride_fn: BinFunction,
+                fixed_duration: bool,
                 array: &ArrayRef,
                 tz_opt: &Option<Arc<str>>,
             ) -> Result<ColumnarValue>
@@ -694,20 +786,17 @@ fn date_bin_impl(
                 T: ArrowTimestampType,
             {
                 let array = as_primitive_array::<T>(array)?;
-                let scale = match T::UNIT {
-                    Nanosecond => 1,
-                    Microsecond => NANOS_PER_MICRO,
-                    Millisecond => NANOS_PER_MILLI,
-                    Second => NANOSECONDS,
+                let fast = if fixed_duration {
+                    date_bin_nanos_fast(array, origin, stride)
+                } else {
+                    None
                 };
-
-                let result: PrimitiveArray<T> = array.try_unary(|val| {
-                    stride_fn(stride, val * scale, origin)
-                        .map(|binned| binned / scale)
-                        .map_err(|e| {
-                            arrow::error::ArrowError::ComputeError(e.to_string())
-                        })
-                })?;
+                let result = match fast {
+                    Some(result) => result,
+                    None => {
+                        date_bin_timestamps_general(array, origin, stride, stride_fn)?
+                    }
+                };
 
                 let array = result.with_timezone_opt(tz_opt.clone());
                 Ok(ColumnarValue::Array(Arc::new(array)))
@@ -716,22 +805,42 @@ fn date_bin_impl(
             match array.data_type() {
                 Timestamp(Nanosecond, tz_opt) => {
                     transform_array_with_stride::<TimestampNanosecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        fixed_duration,
+                        array,
+                        tz_opt,
                     )?
                 }
                 Timestamp(Microsecond, tz_opt) => {
                     transform_array_with_stride::<TimestampMicrosecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        fixed_duration,
+                        array,
+                        tz_opt,
                     )?
                 }
                 Timestamp(Millisecond, tz_opt) => {
                     transform_array_with_stride::<TimestampMillisecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        fixed_duration,
+                        array,
+                        tz_opt,
                     )?
                 }
                 Timestamp(Second, tz_opt) => {
                     transform_array_with_stride::<TimestampSecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        fixed_duration,
+                        array,
+                        tz_opt,
                     )?
                 }
                 Time32(Millisecond) => {
@@ -831,11 +940,16 @@ fn date_bin_impl(
 mod tests {
     use std::sync::Arc;
 
-    use crate::datetime::date_bin::{DateBinFunc, date_bin_nanos_interval};
+    use crate::datetime::date_bin::{
+        DateBinFunc, NonNegativeDivisor, date_bin_nanos_fast, date_bin_nanos_interval,
+        date_bin_timestamps_general,
+    };
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion_common::{DataFusionError, ScalarValue};
@@ -1343,5 +1457,143 @@ mod tests {
         {
             assert!(val.is_none(), "Expected None for out of range operation");
         }
+    }
+
+    #[test]
+    fn nonnegative_divisor_matches_division() {
+        let mut rng = StdRng::seed_from_u64(0x5eed);
+        let mut divisors = vec![2, 3, 5, 7, 10, 60, 1_000, 1_000_000_007, i64::MAX];
+        for k in 1..63 {
+            let p = 1i64 << k;
+            divisors.extend([p - 1, p, p + 1]);
+        }
+        divisors.extend([60_000_000_000, 3_600_000_000_000, 86_400_000_000_000]);
+        for _ in 0..2_000 {
+            let bits = rng.random_range(2..63);
+            divisors.push(rng.random_range(2..=(1i64 << bits)));
+        }
+        divisors.retain(|d| *d >= 2);
+
+        for d in divisors {
+            let divisor = NonNegativeDivisor::new(d).unwrap();
+            let du = d as u64;
+            let max = i64::MAX as u64;
+            let mut dividends = vec![0, 1, du - 1, du, du + 1, max, max - 1];
+            dividends.extend([(max / du) * du, (max / du) * du - 1, max - max % du]);
+            for _ in 0..200 {
+                dividends.push(rng.random_range(0..=max));
+                let q = rng.random_range(0..=max / du);
+                dividends.extend([q * du, (q * du).saturating_sub(1)]);
+            }
+            for n in dividends.into_iter().filter(|n| *n <= max) {
+                assert_eq!(divisor.div(n), n / du, "{n} / {d}");
+            }
+        }
+        for d in [i64::MIN, -1, 0, 1] {
+            assert!(NonNegativeDivisor::new(d).is_none());
+        }
+    }
+
+    fn random_timestamps(rng: &mut StdRng, len: usize, kind: u32) -> Vec<i64> {
+        const NS_2020: i64 = 1_577_836_800_000_000_000;
+        const NS_2030: i64 = 1_893_456_000_000_000_000;
+        (0..len)
+            .map(|i| match kind {
+                0 => rng.random_range(NS_2020..NS_2030),
+                1 => NS_2020 + i as i64 * 10_000_000_000 + rng.random_range(0..1_000),
+                2 => rng.random(),
+                3 => i64::MAX - rng.random_range(0..1_000_000_000_000i64),
+                4 => i64::MIN + rng.random_range(0..1_000_000_000_000i64),
+                5 => rng.random_range(-1_000_000_000_000i64..1_000_000_000_000),
+                _ => rng.random_range(0..=i64::MAX),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fast_path_matches_general_path() {
+        let mut rng = StdRng::seed_from_u64(0xda7eb1);
+        let strides = [
+            -86_400_000_000_000,
+            -1,
+            1,
+            2,
+            1_000,
+            1_000_000_000,
+            60_000_000_000,
+            900_000_000_000,
+            3_600_000_000_000,
+            86_400_000_000_000,
+            604_800_000_000_000,
+            i64::MAX,
+        ];
+        let mut fast_cases = 0;
+        let mut total = 0;
+        for case in 0..3_000 {
+            let len = rng.random_range(0..2_000);
+            let kind = rng.random_range(0..7);
+            let values = random_timestamps(&mut rng, len, kind);
+            let null_rate = [0.0, 0.1, 0.9, 1.0][case % 4];
+            let array: TimestampNanosecondArray = values
+                .iter()
+                .map(|v| (!rng.random_bool(null_rate)).then_some(*v))
+                .collect();
+            let stride = if rng.random_bool(0.7) {
+                strides[rng.random_range(0..strides.len())]
+            } else {
+                rng.random_range(2..=i64::MAX)
+            };
+            let origin = match rng.random_range(0..7) {
+                0 => 0,
+                1 => i64::MIN,
+                2 => i64::MAX,
+                3 => rng.random(),
+                4 => values.first().copied().unwrap_or(0),
+                5 => -rng.random_range(0..1_000_000_000_000_000i64),
+                _ => 1_577_836_800_000_000_000 + rng.random_range(0..1_000_000_000_000),
+            };
+
+            total += 1;
+            let Some(fast) = date_bin_nanos_fast(&array, origin, stride) else {
+                continue;
+            };
+            fast_cases += 1;
+            let general = date_bin_timestamps_general(
+                &array,
+                origin,
+                stride,
+                date_bin_nanos_interval,
+            )
+            .unwrap();
+            assert_eq!(fast, general, "stride {stride} origin {origin}");
+            assert_eq!(fast.nulls(), general.nulls());
+        }
+        assert!(fast_cases > total / 10, "{fast_cases} of {total}");
+    }
+
+    #[test]
+    fn fast_path_declines_possible_overflow() {
+        let stride = 3_600_000_000_000;
+        let decline = |values: Vec<Option<i64>>, origin: i64| {
+            let array = TimestampNanosecondArray::from(values);
+            assert!(date_bin_nanos_fast(&array, origin, stride).is_none());
+        };
+        decline(vec![Some(-1), Some(10)], 0);
+        decline(vec![Some(i64::MAX)], -1);
+        decline(vec![Some(0), Some(i64::MAX)], i64::MIN);
+        decline(vec![None, None], 0);
+        decline(vec![], 0);
+
+        let array = TimestampNanosecondArray::from(vec![Some(i64::MAX), None, Some(0)]);
+        let fast = date_bin_nanos_fast(&array, 0, stride).unwrap();
+        assert_eq!(fast.value(0), i64::MAX - i64::MAX % stride);
+        assert!(fast.is_null(1));
+        assert_eq!(fast.value(2), 0);
+        let array = TimestampNanosecondArray::from(vec![Some(i64::MAX - 1)]);
+        let fast = date_bin_nanos_fast(&array, -1, stride).unwrap();
+        assert_eq!(fast.value(0), -1 + (i64::MAX / stride) * stride);
+
+        let micros = arrow::array::TimestampMicrosecondArray::from(vec![1, 2]);
+        assert!(date_bin_nanos_fast(&micros, 0, stride).is_none());
     }
 }
