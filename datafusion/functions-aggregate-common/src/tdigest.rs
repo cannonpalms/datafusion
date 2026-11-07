@@ -148,6 +148,55 @@ impl TDigest {
         self.max_size
     }
 
+    /// The sum of all values ingested into this digest.
+    #[inline]
+    pub fn sum(&self) -> f64 {
+        self.sum
+    }
+
+    /// The centroids that make up this digest, ordered by mean.
+    #[inline]
+    pub fn centroids(&self) -> &[Centroid] {
+        &self.centroids
+    }
+
+    /// Builds a digest from the same parts that [`Self::from_scalar_state()`]
+    /// unpacks, with the same checks, so that a caller holding the state
+    /// columns as Arrow arrays can skip the per-row [`ScalarValue`] round trip.
+    ///
+    /// `centroids` holds interleaved `(mean, weight)` pairs.
+    ///
+    /// # Correctness
+    ///
+    /// Providing input that was not obtained from a [`TDigest`]'s state
+    /// results in undefined behaviour and may panic.
+    pub fn from_state_parts(
+        max_size: usize,
+        sum: f64,
+        count: f64,
+        max: f64,
+        min: f64,
+        centroids: &[f64],
+    ) -> Self {
+        let centroids: Vec<_> = centroids
+            .chunks(2)
+            .map(|v| Centroid::new(v[0], v[1]))
+            .collect();
+
+        if min.is_finite() && max.is_finite() {
+            assert!(max.total_cmp(&min).is_ge());
+        }
+
+        Self {
+            centroids,
+            max_size,
+            sum,
+            count,
+            max,
+            min,
+        }
+    }
+
     /// Size in bytes including `Self`.
     pub fn size(&self) -> usize {
         size_of_val(self) + (size_of::<Centroid>() * self.centroids.capacity())

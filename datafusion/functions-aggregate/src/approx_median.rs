@@ -29,12 +29,17 @@ use datafusion_common::{Result, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Coercion, Documentation, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, GroupsAccumulator, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
-use crate::approx_percentile_cont::ApproxPercentileAccumulator;
+use datafusion_functions_aggregate_common::tdigest::DEFAULT_MAX_SIZE;
+
+use crate::approx_percentile_cont::{
+    ApproxPercentileAccumulator, ApproxPercentileGroupsAccumulator,
+    is_supported_input_type,
+};
 
 make_udaf_expr_and_func!(
     ApproxMedian,
@@ -152,6 +157,21 @@ impl AggregateUDFImpl for ApproxMedian {
                 acc_args.expr_fields[0].data_type().clone(),
             )))
         }
+    }
+
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        !args.is_distinct && is_supported_input_type(args.expr_fields[0].data_type())
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        Ok(Box::new(ApproxPercentileGroupsAccumulator::new(
+            0.5_f64,
+            args.expr_fields[0].data_type().clone(),
+            DEFAULT_MAX_SIZE,
+        )))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
