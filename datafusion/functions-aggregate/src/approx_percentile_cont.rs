@@ -1275,55 +1275,71 @@ mod tests {
     #[test]
     fn groups_accumulator_matches_adapter_on_merge() -> Result<()> {
         for (seed, shape) in shapes().into_iter().enumerate() {
-            let mut rng = StdRng::seed_from_u64(1000 + seed as u64);
-            let final_groups = rng.random_range(1..=shape.groups);
-            let what = format!("{shape:?} final_groups={final_groups}");
-
-            // Partial states from several partitions, alternating between the
-            // two kinds of partial accumulator.
-            let mut partials = vec![];
-            for p in 0..4 {
-                let batches = random_batches(&mut rng, &shape);
-                let [mut a, mut g] = pair(0.99, &DataType::Float64, 100);
-                update(a.as_mut(), &batches)?;
-                update(g.as_mut(), &batches)?;
-                let (sa, sg) = (a.state(EmitTo::All)?, g.state(EmitTo::All)?);
-                assert_same(&sa, &sg, &what);
-                partials.push(if p % 2 == 0 { sa } else { sg });
-            }
-
-            let [mut a, mut g] = pair(0.99, &DataType::Float64, 100);
-            for (p, state) in partials.iter().enumerate() {
-                // Several rows of one state batch can land in the same final
-                // group.
-                let rows = state[0].len();
-                let group_indices: Vec<usize> = (0..rows)
-                    .map(|_| rng.random_range(0..final_groups))
-                    .collect();
-                let filter = (shape.filter && p == 1).then(|| {
-                    (0..rows)
-                        .map(|_| (!rng.random_bool(0.1)).then(|| rng.random_bool(0.5)))
-                        .collect::<BooleanArray>()
-                });
-                for acc in [&mut a, &mut g] {
-                    acc.merge_batch(
-                        state,
-                        &group_indices,
-                        filter.as_ref(),
-                        final_groups,
-                    )?;
-                }
-            }
-            if final_groups == 1 {
-                assert_same(&a.state(EmitTo::All)?, &g.state(EmitTo::All)?, &what);
-            } else {
-                let first = EmitTo::First(final_groups / 2);
-                assert_same(&a.state(first)?, &g.state(first)?, &what);
-                assert_same(
-                    &[a.evaluate(EmitTo::All)?],
-                    &[g.evaluate(EmitTo::All)?],
-                    &what,
+            for (percentile, max_size) in
+                [(0.99, 100), (0.5, 100), (0.1, 10), (0.0, 100), (1.0, 7)]
+            {
+                let mut rng = StdRng::seed_from_u64(1000 + seed as u64);
+                let final_groups = rng.random_range(1..=shape.groups);
+                let what = format!(
+                    "{shape:?} p={percentile} max_size={max_size} final_groups={final_groups}"
                 );
+
+                // Partial states from several partitions, alternating between
+                // the two kinds of partial accumulator.
+                let mut partials = vec![];
+                for p in 0..4 {
+                    let batches = random_batches(&mut rng, &shape);
+                    let [mut a, mut g] = pair(percentile, &DataType::Float64, max_size);
+                    update(a.as_mut(), &batches)?;
+                    update(g.as_mut(), &batches)?;
+                    let (sa, sg) = (a.state(EmitTo::All)?, g.state(EmitTo::All)?);
+                    assert_same(&sa, &sg, &what);
+                    partials.push(if p % 2 == 0 { sa } else { sg });
+                }
+
+                let [mut a, mut g] = pair(percentile, &DataType::Float64, max_size);
+                for (p, state) in partials.iter().enumerate() {
+                    // Several rows of one state batch can land in the same
+                    // final group.
+                    let rows = state[0].len();
+                    let group_indices: Vec<usize> = (0..rows)
+                        .map(|_| rng.random_range(0..final_groups))
+                        .collect();
+                    let filter = (shape.filter && p == 1).then(|| {
+                        (0..rows)
+                            .map(|_| {
+                                (!rng.random_bool(0.1)).then(|| rng.random_bool(0.5))
+                            })
+                            .collect::<BooleanArray>()
+                    });
+                    // Merge each state batch as two slices, so the state
+                    // arrays reach merge_batch with a non-zero offset.
+                    let mid = rows / 2;
+                    for (offset, len) in [(0, mid), (mid, rows - mid)] {
+                        let sliced: Vec<ArrayRef> =
+                            state.iter().map(|c| c.slice(offset, len)).collect();
+                        let filter = filter.as_ref().map(|f| f.slice(offset, len));
+                        for acc in [&mut a, &mut g] {
+                            acc.merge_batch(
+                                &sliced,
+                                &group_indices[offset..offset + len],
+                                filter.as_ref(),
+                                final_groups,
+                            )?;
+                        }
+                    }
+                }
+                if final_groups == 1 {
+                    assert_same(&a.state(EmitTo::All)?, &g.state(EmitTo::All)?, &what);
+                } else {
+                    let first = EmitTo::First(final_groups / 2);
+                    assert_same(&a.state(first)?, &g.state(first)?, &what);
+                    assert_same(
+                        &[a.evaluate(EmitTo::All)?],
+                        &[g.evaluate(EmitTo::All)?],
+                        &what,
+                    );
+                }
             }
         }
         Ok(())
