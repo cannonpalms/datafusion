@@ -547,6 +547,8 @@ pub(crate) struct ApproxPercentileGroupsAccumulator {
     keys: Vec<i64>,
     rows: Vec<u32>,
     sorted: Vec<f64>,
+    /// One group's incoming digests in `merge_batch`. Empty between calls.
+    incoming: Vec<TDigest>,
 }
 
 impl ApproxPercentileGroupsAccumulator {
@@ -563,6 +565,7 @@ impl ApproxPercentileGroupsAccumulator {
             keys: vec![],
             rows: vec![],
             sorted: vec![],
+            incoming: vec![],
         }
     }
 
@@ -878,14 +881,13 @@ impl GroupsAccumulator for ApproxPercentileGroupsAccumulator {
             self.counts[group] = slot + 1;
         }
 
-        let mut incoming = Vec::new();
         for i in 0..self.touched.len() {
             let group = self.touched[i];
             let start = self.starts[i] as usize;
             let end = self.counts[group] as usize;
             self.counts[group] = 0;
 
-            incoming.clear();
+            self.incoming.clear();
             for &row in &self.rows[start..end] {
                 let row = row as usize;
                 if let Some(filter) = opt_filter
@@ -894,7 +896,7 @@ impl GroupsAccumulator for ApproxPercentileGroupsAccumulator {
                     continue;
                 }
                 let (lo, hi) = (offsets[row] as usize, offsets[row + 1] as usize);
-                incoming.push(TDigest::from_state_parts(
+                self.incoming.push(TDigest::from_state_parts(
                     max_size[row] as usize,
                     sum[row],
                     count[row],
@@ -904,10 +906,13 @@ impl GroupsAccumulator for ApproxPercentileGroupsAccumulator {
                 ));
             }
             let digest = TDigest::merge_digests(
-                incoming.iter().chain(std::iter::once(&self.digests[group])),
+                self.incoming
+                    .iter()
+                    .chain(std::iter::once(&self.digests[group])),
             );
             self.replace_digest(group, digest);
         }
+        self.incoming.clear();
         Ok(())
     }
 
@@ -947,6 +952,7 @@ impl GroupsAccumulator for ApproxPercentileGroupsAccumulator {
             + self.keys.capacity() * size_of::<i64>()
             + self.rows.capacity() * size_of::<u32>()
             + self.sorted.capacity() * size_of::<f64>()
+            + self.incoming.capacity() * size_of::<TDigest>()
             + self.return_type.size()
             - size_of_val(&self.return_type)
     }
