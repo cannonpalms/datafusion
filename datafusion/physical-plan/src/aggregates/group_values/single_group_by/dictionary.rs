@@ -357,7 +357,10 @@ mod tests {
     use super::*;
     use crate::aggregates::group_values::multi_group_by::GroupValuesColumn;
     use arrow::array::{Int8Array, Int32Array};
-    use arrow::datatypes::{Field, Int8Type, Int32Type, Schema, UInt16Type};
+    use arrow::datatypes::{
+        Field, Int8Type, Int32Type, Int64Type, Schema, UInt8Type, UInt16Type, UInt32Type,
+        UInt64Type,
+    };
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 
@@ -608,7 +611,8 @@ mod tests {
 
     /// Batches that switch between reusing the previous values array and
     /// building a new one, with null keys, null and empty values, duplicate
-    /// and unused values, and emits in between.
+    /// and unused values, sliced values arrays, sliced dictionaries, and
+    /// emits in between.
     fn random_steps<K: ArrowDictionaryKeyType>(
         rng: &mut StdRng,
         vocab_len: usize,
@@ -619,27 +623,34 @@ mod tests {
         for _ in 0..40 {
             if values.is_none() || rng.random_bool(0.4) {
                 let n = rng.random_range(0..30);
-                values = Some(Arc::new(StringArray::from_iter((0..n).map(|_| {
-                    match rng.random_range(0..10) {
-                        0 => None,
-                        1 => Some(String::new()),
-                        _ => Some(vocab[rng.random_range(0..vocab_len)].clone()),
-                    }
-                }))));
+                let pad = rng.random_range(0..4);
+                let full: ArrayRef =
+                    Arc::new(StringArray::from_iter((0..n + pad).map(|_| {
+                        match rng.random_range(0..10) {
+                            0 => None,
+                            1 => Some(String::new()),
+                            _ => Some(vocab[rng.random_range(0..vocab_len)].clone()),
+                        }
+                    })));
+                values = Some(full.slice(rng.random_range(0..=pad), n));
             }
             let values = values.as_ref().unwrap();
             let rows = rng.random_range(0..40);
-            let keys = PrimitiveArray::<K>::from_iter((0..rows).map(|_| {
+            let pad = if rng.random_bool(0.3) {
+                rng.random_range(1..5)
+            } else {
+                0
+            };
+            let keys = PrimitiveArray::<K>::from_iter((0..rows + pad).map(|_| {
                 if values.is_empty() || rng.random_bool(0.1) {
                     None
                 } else {
                     Some(K::Native::usize_as(rng.random_range(0..values.len())))
                 }
             }));
-            steps.push(Step::Intern(Arc::new(DictionaryArray::<K>::new(
-                keys,
-                Arc::clone(values),
-            ))));
+            let dict: ArrayRef =
+                Arc::new(DictionaryArray::<K>::new(keys, Arc::clone(values)));
+            steps.push(Step::Intern(dict.slice(rng.random_range(0..=pad), rows)));
             match rng.random_range(0..10) {
                 0 => steps.push(Step::EmitAll),
                 1 | 2 => steps.push(Step::EmitFirst(rng.random_range(1..20))),
@@ -647,6 +658,33 @@ mod tests {
             }
         }
         steps
+    }
+
+    fn fixed_steps<K: ArrowDictionaryKeyType>() -> Vec<Step> {
+        let dict = |keys: &[Option<usize>], values: &ArrayRef| -> ArrayRef {
+            let keys = PrimitiveArray::<K>::from_iter(
+                keys.iter().map(|k| k.map(K::Native::usize_as)),
+            );
+            Arc::new(DictionaryArray::<K>::new(keys, Arc::clone(values)))
+        };
+        let first = strings(&[Some("a"), None, Some("b"), Some("a"), Some("c")]);
+        let second = strings(&[Some("c"), Some("d"), Some("a")]);
+        vec![
+            Step::Intern(dict(&[Some(2), None, Some(0), Some(3)], &first)),
+            Step::EmitFirst(1),
+            Step::Intern(dict(&[Some(4), Some(1), Some(2)], &first)),
+            Step::Intern(dict(&[Some(1), Some(0), None, Some(2)], &second)),
+            Step::EmitAll,
+            Step::Intern(dict(&[Some(2), Some(1)], &second)),
+        ]
+    }
+
+    #[test]
+    fn remaining_key_types_match_generic() {
+        check_against_generic::<Int64Type>(&fixed_steps::<Int64Type>());
+        check_against_generic::<UInt8Type>(&fixed_steps::<UInt8Type>());
+        check_against_generic::<UInt32Type>(&fixed_steps::<UInt32Type>());
+        check_against_generic::<UInt64Type>(&fixed_steps::<UInt64Type>());
     }
 
     #[test]
