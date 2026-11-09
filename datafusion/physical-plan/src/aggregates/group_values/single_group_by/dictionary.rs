@@ -17,7 +17,7 @@
 
 use std::marker::PhantomData;
 use std::mem::size_of;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use crate::aggregates::AGGREGATION_HASH_SEED;
 use crate::aggregates::group_values::GroupValues;
@@ -52,7 +52,10 @@ pub struct GroupValuesDictionary<K: ArrowDictionaryKeyType> {
     /// `value_to_group[i]` is the group of `cached_values[i]`, or
     /// [`UNRESOLVED`] if no row has referenced it yet.
     value_to_group: Vec<usize>,
-    cached_values: Option<ArrayRef>,
+    /// Weak reference to the values array that `value_to_group` was built
+    /// for. A matching live array reuses the mapping without retaining an
+    /// input dictionary after its batch is released.
+    cached_values: Option<Weak<dyn Array>>,
     _phantom: PhantomData<fn() -> K>,
 }
 
@@ -135,17 +138,19 @@ impl<K: ArrowDictionaryKeyType> GroupValuesDictionary<K> {
         }
     }
 
-    fn sync_value_cache(&mut self, values: &ArrayRef) {
-        if self
-            .cached_values
+    fn is_cached(&self, values: &ArrayRef) -> bool {
+        self.cached_values
             .as_ref()
-            .is_some_and(|c| Arc::ptr_eq(c, values))
-        {
+            .is_some_and(|cached| std::ptr::addr_eq(cached.as_ptr(), Arc::as_ptr(values)))
+    }
+
+    fn sync_value_cache(&mut self, values: &ArrayRef) {
+        if self.is_cached(values) {
             return;
         }
         self.value_to_group.clear();
         self.value_to_group.resize(values.len(), UNRESOLVED);
-        self.cached_values = Some(Arc::clone(values));
+        self.cached_values = Some(Arc::downgrade(values));
     }
 
     fn drop_value_cache(&mut self) {
@@ -457,6 +462,30 @@ mod tests {
             emit_both(&mut ours, &mut generic, EmitTo::All);
             assert!(ours.is_empty());
         }
+    }
+
+    #[test]
+    fn value_cache_does_not_retain_dictionary_values() {
+        let mut gv = GroupValuesDictionary::<Int32Type>::new();
+        let values = strings(&[Some("retained"), Some("other")]);
+        let weak_values = Arc::downgrade(&values);
+        let input = dict_i32(&[Some(0), Some(0)], &values);
+        let mut groups = Vec::new();
+        gv.intern(&[Arc::clone(&input)], &mut groups).unwrap();
+        assert!(gv.is_cached(&values));
+
+        // The cache is only an identity hint: it must not keep an input
+        // dictionary allocation alive after its batch is released.
+        drop(values);
+        drop(input);
+        assert!(weak_values.upgrade().is_none());
+
+        let next = dict_i32(
+            &[Some(1), Some(0)],
+            &strings(&[Some("new"), Some("retained")]),
+        );
+        gv.intern(&[next], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1]);
     }
 
     #[test]
